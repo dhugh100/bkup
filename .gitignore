@@ -1,0 +1,32 @@
+# block everything by default
+*
+
+# whitelist tracked files
+!.gitignore
+!Makefile
+!LICENSE
+!README.md
+!config.md
+!src/
+!src/**
+!tests/
+!tests/**
+!doSetup.sh
+!bkupd.service
+!bkup.conf.example
+!selinux/
+!selinux/bkupd.te
+!selinux/bkupd.fc
+
+# RPM packaging: track the spec + build script, but never the built artifacts
+# (packaging/rpms/ stays ignored since it is not whitelisted here).
+!packaging/
+!packaging/bkup.spec
+!packaging/build-rpm.sh
+!packaging/60-bkupd-fanotify.conf
+
+# GitHub Actions: builds the RPM in a clean container on tag push.
+!.github/
+!.github/workflows/
+!.github/workflows/rpm.yml
+!.github/workflows/test.yml

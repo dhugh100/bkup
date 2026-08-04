@@ -1,0 +1,19 @@
+[Unit]
+Description=bkup backup daemon
+After=network.target
+
+[Service]
+Type=simple
+# Runs as root: reads the root-only key file and serves every user, scoping
+# each request to the calling user (SO_PEERCRED). HOME must be set so the
+# daemon resolves ~/.ssh (keys + known_hosts) and ~/.local catalogs.
+Environment=HOME=/root
+ExecStart=/usr/local/bin/bkupd -c /etc/bkup.conf
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

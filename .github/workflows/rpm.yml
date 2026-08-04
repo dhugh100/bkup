@@ -1,0 +1,108 @@
+name: Build RPM
+
+# Gate + release in one workflow. The `test` job builds the CLI + daemon and
+# runs the offline suite (unit, catalog/backup logic, daemon logic, fake-
+# transport round-trip), first normally then under AddressSanitizer + UBSan; the
+# integration tier (real SFTP) is not run in CI and auto-skips with no server.
+# The `build-rpm` job declares `needs: test`, so the RPM is built -- and, on a
+# v* tag, the GitHub release is cut -- only when the suite passes. Pull requests
+# run `test` alone (build-rpm is skipped); pushes to main run test then RPM; a
+# v* tag runs test then RPM + release.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc make pkgconf-pkg-config \
+            sqlite-devel libzstd-devel libsodium-devel libssh2-devel \
+            libasan libubsan
+
+      # Build only the CLI + daemon (their objects are what the test runner
+      # links); skip bin/bkup-gui so GTK4 is not needed in CI.
+      - name: Build
+        run: make bin/bkup bin/bkupd
+
+      - name: Run test suite
+        run: tests/run_tests.sh
+
+      - name: Run test suite under ASan + UBSan
+        run: BKUP_TEST_SAN=1 tests/run_tests.sh
+
+  build-rpm:
+    # Gate the release build on the suite, and never build an RPM for a PR.
+    # The repository guard keeps forks from building and publishing releases.
+    needs: test
+    if: github.event_name != 'pull_request' && github.repository == 'dhugh100/bkup'
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install build dependencies
+        # Mirrors BuildRequires in packaging/bkup.spec (listed explicitly rather
+        # than via builddep to stay robust across dnf4/dnf5).
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc make pkgconf-pkg-config \
+            sqlite-devel libzstd-devel libsodium-devel libssh2-devel \
+            gtk4-devel selinux-policy-devel \
+            systemd-rpm-macros \
+            rpm-build
+
+      - name: Read version from spec
+        id: ver
+        run: |
+          VERSION=$(grep '^Version:' packaging/bkup.spec | awk '{print $2}')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tarname=bkup-$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create source tarball
+        # Stage exactly what the spec's %build/%install needs: Makefile, LICENSE, src/, selinux/, doSetup.sh.
+        run: |
+          TARNAME="${{ steps.ver.outputs.tarname }}"
+          mkdir -p ~/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          mkdir -p /tmp/$TARNAME
+          cp -a Makefile LICENSE src selinux doSetup.sh /tmp/$TARNAME/
+          tar -czf ~/rpmbuild/SOURCES/${TARNAME}.tar.gz -C /tmp "$TARNAME"
+          cp packaging/60-bkupd-fanotify.conf ~/rpmbuild/SOURCES/
+          cp bkupd.service ~/rpmbuild/SOURCES/
+          cp packaging/bkup.spec ~/rpmbuild/SPECS/
+
+      - name: Build RPM
+        run: rpmbuild -ba ~/rpmbuild/SPECS/bkup.spec
+
+      - name: Collect RPMs
+        run: |
+          mkdir -p dist
+          find ~/rpmbuild/RPMS ~/rpmbuild/SRPMS -name 'bkup*.rpm' -exec cp {} dist/ \;
+          ls -lh dist/
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bkup-rpm-${{ steps.ver.outputs.version }}
+          path: dist/*.rpm
+          retention-days: 30
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          files: dist/*.rpm

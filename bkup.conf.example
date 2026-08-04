@@ -1,0 +1,44 @@
+# bkup.conf -- example system configuration
+#
+# Deploy as /etc/bkup.conf (root:root, 0644). It contains NO secret: the
+# passphrase lives in the separate root-only file named by key_file.
+# The systemd unit runs one daemon as root with: bkupd -c /etc/bkup.conf
+#
+# See config.md for the full key reference and the schedule grammar.
+
+[global]
+server   = backup-server
+port     = 22
+ssh_user = backup
+repo     = /mnt/raid1/bkup        # root for ALL users; each -> repo/<user>
+key_file = /etc/bkup.key          # root:root 0600; the one backup passphrase
+log_file = /var/log/bkup/bkup.log # durable event log (default); see config.md
+# Patterns applied to every user (in addition to per-user excludes below).
+exclude  = .cache
+exclude  = .bash_history
+exclude  = *.swp
+
+[user "root"]
+source       = /root
+source       = /etc
+source       = /usr/local/bin
+source       = /usr/lib/systemd/system
+# daemon schedules: backup nightly, prune weekly (Mondays) after the backup
+backup       = daily 02:00
+prune        = weekly 04:00
+keep-daily   = 7
+keep-weekly  = 4
+keep-monthly = 12
+keep-yearly  = 1
+
+[user "alice"]
+source       = /home/alice
+# continuous backups (watcher-driven, between scheduled runs); on by default.
+# Set off to disable the watcher for this user and rely only on `backup` below.
+continuous   = on
+backup       = daily 03:30
+prune        = weekly 04:30
+keep-daily   = 7
+keep-weekly  = 4
+keep-monthly = 12
+keep-yearly  = 1

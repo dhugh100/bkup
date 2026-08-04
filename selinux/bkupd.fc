@@ -1,0 +1,15 @@
+# bkupd executable -- labeling it bkupd_exec_t is what makes systemd transition
+# the daemon from init_t into the confined bkupd_t domain. The RPM installs the
+# daemon at /usr/local/bin/bkupd.
+/usr/local/bin/bkupd			--	gen_context(system_u:object_r:bkupd_exec_t,s0)
+
+# Per-user SQLite catalog dirs (~/.local/share/bkup/). The root daemon reads and
+# writes each user's catalog here; give them a dedicated type so we never have to
+# grant write to all of data_home_t. The dir label propagates to the .db plus the
+# -wal/-shm/-journal files sqlite creates beside it.
+HOME_DIR/\.local/share/bkup(/.*)?		gen_context(system_u:object_r:bkupd_catalog_t,s0)
+/root/\.local/share/bkup(/.*)?			gen_context(system_u:object_r:bkupd_catalog_t,s0)
+
+# Durable event log dir + files (default /var/log/bkup/bkup.log). Own type so the
+# daemon can create and chmod its log without write to all of var_log_t.
+/var/log/bkup(/.*)?				gen_context(system_u:object_r:bkupd_log_t,s0)

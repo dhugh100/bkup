@@ -1,0 +1,131 @@
+policy_module(bkupd, 1.0.14)
+
+########################################
+# Declarations
+#
+type bkupd_t;
+type bkupd_exec_t;
+# Establishes bkupd_t as a daemon domain and sets up the automatic
+# transition init_t -> bkupd_t when systemd executes bkupd_exec_t.
+init_daemon_domain(bkupd_t, bkupd_exec_t)
+
+# Runtime control socket in /run (/run/bkupd.sock).
+type bkupd_runtime_t;
+files_pid_file(bkupd_runtime_t)
+
+# Per-user SQLite catalog dir (~/.local/share/bkup/) -- the daemon reads AND
+# writes it on behalf of each user, so it gets its own type rather than
+# granting write to all of data_home_t. The dir's label propagates to the
+# -wal/-shm/-journal files SQLite creates beside the .db.
+type bkupd_catalog_t;
+files_type(bkupd_catalog_t)
+
+# Durable event log (/var/log/bkup/). Like the catalog it gets its own type
+# rather than granting write to all of var_log_t. The daemon mkdir()s the dir,
+# fopen()s the log "a", then fchmod()s it to 0664 -- that fchmod is the setattr.
+type bkupd_log_t;
+logging_log_file(bkupd_log_t)
+
+########################################
+# Policy
+#
+# A backup agent must read every (non-security) file on the system:
+# grants list/search on all dirs and read on all regular files.
+files_read_all_files(bkupd_t)
+
+# The scan also lstat()s the whole tree, so it needs getattr on every other
+# node type (and read on symlinks to record their targets). Without these the
+# walk trips on each symlink/special file -- and since this custom domain has
+# no dontaudit rules, every one is audited (a setroubleshoot storm).
+files_read_all_symlinks(bkupd_t)
+files_getattr_all_pipes(bkupd_t)
+files_getattr_all_sockets(bkupd_t)
+files_getattr_all_chr_files(bkupd_t)
+files_getattr_all_blk_files(bkupd_t)
+
+# Runs as root and crosses DAC to read files/dirs it does not own. setgid/setuid
+# are for the restore path, where it forks and drops to the calling user so the
+# kernel confines the write loop to what that user could write (see below).
+# chown is for the restore path too: restored files are chown()ed back to their
+# original owner, which requires CAP_CHOWN.
+# sys_admin is required by fanotify_init() for the spot-backup watch (watch.c);
+# without it the confined daemon's fanotify setup is denied under enforcing.
+allow bkupd_t self:capability { chown dac_override dac_read_search setgid setuid sys_admin };
+
+# The spot-backup watch sets a fanotify inode mark (FAN_MARK_ADD) on every
+# directory in each source tree (watch.c) -- inode marks rather than
+# FAN_MARK_FILESYSTEM, because the latter hits EXDEV across btrfs subvolumes.
+# An inode mark is checked as the "watch" permission on the marked object. A
+# source can be any directory type, so grant watch across all file types --
+# mirroring the read-all posture above (file_type attribute) so a new source
+# dir type needs no policy change. The setup also statfs()es each source to
+# track its mount, so getattr on the filesystem is still needed.
+fs_getattr_xattr_fs(bkupd_t)
+gen_require(`
+	attribute file_type;
+')
+allow bkupd_t file_type:dir watch;
+
+# Read+write the per-user catalog DB (and its sqlite sidecar files).
+# map is required for mmap() on the .db-shm WAL shared-memory file;
+# manage_files_pattern does not include it.
+manage_dirs_pattern(bkupd_t, bkupd_catalog_t, bkupd_catalog_t)
+manage_files_pattern(bkupd_t, bkupd_catalog_t, bkupd_catalog_t)
+allow bkupd_t bkupd_catalog_t:file map;
+
+# Create+write the event log and its dir. The dir is created directly under
+# /var/log (var_log_t -> bkupd_log_t); the log file is created inside it.
+manage_dirs_pattern(bkupd_t, bkupd_log_t, bkupd_log_t)
+manage_files_pattern(bkupd_t, bkupd_log_t, bkupd_log_t)
+logging_log_filetrans(bkupd_t, bkupd_log_t, dir)
+filetrans_pattern(bkupd_t, bkupd_log_t, bkupd_log_t, file)
+
+# Restore destinations. The restore write loop runs in a child that has dropped
+# to the calling user, so DAC confines *where* it may write -- but that child
+# keeps the bkupd_t domain, so MAC must still allow the user-data types restores
+# land in. user_home_content_type covers the home tree (user_home_t plus the xdg
+# data/config/cache home subtypes); generic tmp covers /tmp. System types
+# (etc_t, usr_t, ...) are deliberately left denied as a hard backstop, so even a
+# bug in the privilege drop cannot let a restore clobber the system. New entries
+# inherit their parent dir's type by default, so no filetrans is needed here.
+userdom_manage_user_home_content_dirs(bkupd_t)
+userdom_manage_user_home_content_files(bkupd_t)
+userdom_manage_user_home_content_symlinks(bkupd_t)
+# Root's home (/root) is labeled admin_home_t, a distinct type that does NOT
+# carry the user_home_content_type attribute, so the macros above do not cover it.
+# Without these rules bkupd_t is denied when creating /root/.local/share/bkup/
+# (the root-user catalog) and when restoring files into /root/. The filetrans
+# ensures the "bkup" dir transitions to bkupd_catalog_t rather than inheriting
+# admin_home_t, so the catalog perms above still apply once it is created.
+gen_require(`
+	type admin_home_t;
+')
+manage_dirs_pattern(bkupd_t, admin_home_t, admin_home_t)
+manage_files_pattern(bkupd_t, admin_home_t, admin_home_t)
+manage_lnk_files_pattern(bkupd_t, admin_home_t, admin_home_t)
+filetrans_pattern(bkupd_t, admin_home_t, bkupd_catalog_t, dir, "bkup")
+files_manage_generic_tmp_dirs(bkupd_t)
+files_manage_generic_tmp_files(bkupd_t)
+# No files_manage_generic_tmp_symlinks() interface exists, so grant the symlink
+# perms directly (restores can include symlinks).
+gen_require(`
+	type tmp_t;
+')
+allow bkupd_t tmp_t:lnk_file manage_lnk_file_perms;
+
+# Listening control socket and its node under /run.
+allow bkupd_t self:unix_stream_socket create_stream_socket_perms;
+manage_sock_files_pattern(bkupd_t, bkupd_runtime_t, bkupd_runtime_t)
+files_pid_filetrans(bkupd_t, bkupd_runtime_t, sock_file)
+
+# Outbound SSH to the backup server. The daemon opens the TCP connection
+# itself (in-process), so it needs tcp_socket perms + connect to ssh_port_t,
+# hostname resolution, and peer-UID -> username lookups (SO_PEERCRED scoping).
+# (Baked in from prior audit evidence; verified on the next live backup run.)
+allow bkupd_t self:tcp_socket create_stream_socket_perms;
+corenet_tcp_sendrecv_generic_if(bkupd_t)
+corenet_tcp_sendrecv_generic_node(bkupd_t)
+corenet_tcp_connect_ssh_port(bkupd_t)
+corenet_tcp_sendrecv_ssh_port(bkupd_t)
+sysnet_dns_name_resolve(bkupd_t)
+auth_use_nsswitch(bkupd_t)
