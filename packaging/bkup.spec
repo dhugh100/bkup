@@ -3,7 +3,7 @@
 %{!?_sysctldir: %global _sysctldir /usr/lib/sysctl.d}
 
 Name:           bkup
-Version:        0.7.1
+Version:        0.7.2
 Release:        1%{?dist}
 Summary:        Encrypted deduplicating backup tool (CLI + daemon + GUI)
 
@@ -89,12 +89,16 @@ fi
 /usr/lib/systemd/systemd-sysctl %{_sysctldir}/60-bkupd-fanotify.conf \
     2>/dev/null || :
 
+# Only on a fresh install ($1 == 1). On upgrade ($1 > 1) the repos are already
+# initialized and re-running bkup-setup would be a no-op at best, so stay quiet.
+if [ "$1" -eq 1 ]; then
 echo ""
 echo "==> bkup installed. Next steps:"
 echo "    1. Create /etc/bkup.conf (see 'man bkup' or config.md)."
 echo "    2. Run 'sudo bkup-setup' to set the passphrase and init each user's repo."
 echo "    3. Run 'sudo systemctl enable --now bkupd' to start the daemon."
 echo ""
+fi
 
 %preun
 %systemd_preun bkupd.service
@@ -114,6 +118,8 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Tue Aug 04 2026 dhugh <dhugh100@users.noreply.github.com> - 0.7.2-1
+- Release 0.7.2
 * Tue Aug 04 2026 dhugh <dhugh100@users.noreply.github.com> - 0.7.1-1
 - Release 0.7.1
 * Thu Jul 16 2026 dhugh <dhugh100@users.noreply.github.com> - 0.7.0-1
