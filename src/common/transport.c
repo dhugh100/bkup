@@ -111,6 +111,14 @@ static int local_delete(const struct Transport *t, const char *path)
     return r;
 }
 
+static int local_rmdir(const struct Transport *t, const char *path)
+{
+    char *m = lmap(t, path);
+    int r = (rmdir(m) == 0 || errno == ENOENT) ? 0 : -1;
+    free(m);
+    return r;
+}
+
 static int local_rmtree(const struct Transport *t, const char *path)
 {
     char *m = lmap(t, path);
@@ -485,6 +493,14 @@ int transport_rmtree(Transport *t, const char *path)
         libssh2_sftp_last_error(t->sftp) != LIBSSH2_FX_NO_SUCH_FILE)
         rc = -1;
     return rc;
+}
+
+int transport_rmdir(Transport *t, const char *path)
+{
+    if (t->kind == TR_LOCAL) return local_rmdir(t, path);
+    if (libssh2_sftp_rmdir(t->sftp, path) == 0) return 0;
+    if (libssh2_sftp_last_error(t->sftp) == LIBSSH2_FX_NO_SUCH_FILE) return 0;
+    return -1;
 }
 
 int transport_mkdir_p(Transport *t, const char *path)

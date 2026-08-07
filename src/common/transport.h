@@ -37,6 +37,11 @@ int transport_delete(Transport *t, const char *path);
    success, -1 if any entry could not be removed. */
 int transport_rmtree(Transport *t, const char *path);
 
+/* Delete a remote directory only if it is empty. Returns 0 on success or if
+   already absent, -1 otherwise -- including the ordinary "not empty" case, so
+   callers can attempt it speculatively and ignore the failure. */
+int transport_rmdir(Transport *t, const char *path);
+
 /* Atomic publish: write path.tmp then rename onto path. If overwrite is 0 and
    the target already exists, the tmp file is removed and success is returned
    (content-addressed blobs are identical by construction). */

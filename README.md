@@ -232,6 +232,20 @@ not referenced by any version are then deleted from the server -- but only after
 the remote file is confirmed gone, so a failed deletion is retried on the next
 prune run rather than leaving a dangling catalog reference.
 
+Prune then removes what those deletions left empty, at both ends. In the
+catalog, a directory version with no file or symlink version anywhere beneath it
+is dropped, so restoring an old snapshot no longer recreates a skeleton of empty
+directories; ancestry is matched on whole path components, so `/a/bc` never
+counts as content of `/a/b`, and a directory holding only empty subdirectories
+falls in the same pass as its children. Any `files.version_id` still pointing at
+a removed directory version is cleared rather than left dangling, and the next
+backup re-captures the directory if it has gained content by then. This is a
+deliberate trade of fidelity for size: a directory that was genuinely empty on
+disk when it was captured also stops being restored. On the server, deleting the
+last orphaned blob out of a `blobs/<2 hex>` fan-out directory leaves it empty, so
+prune attempts an `rmdir` on each directory it deleted from -- one that still
+holds blobs simply fails the rmdir and is left alone.
+
 ## Restore
 
 `bkup restore` has two resolution modes. In point-in-time mode (`-s SNAP`), it

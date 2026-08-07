@@ -352,6 +352,145 @@ static void test_blob_gc_reachability_sql(void)
     rmtree_local(base);
 }
 
+/* ---- empty-directory sweep (prune_empty_dirs) ---- */
+
+/* Count surviving version rows whose path matches exactly. */
+static int have_version(sqlite3 *db, const char *path)
+{
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM versions WHERE path=?",
+                       -1, &st, NULL);
+    sqlite3_bind_text(st, 1, path, -1, SQLITE_STATIC);
+    int n = (sqlite3_step(st) == SQLITE_ROW) ? sqlite3_column_int(st, 0) : -1;
+    sqlite3_finalize(st);
+    return n;
+}
+
+/*
+ * A directory keeps its version only if a file or symlink version lives
+ * somewhere beneath it.
+ *
+ *   /x/keep        dir, holds /x/keep/f          -> kept
+ *   /x/keep/deep   dir, holds /x/keep/deep/g     -> kept (nested content)
+ *   /x/drop        dir, empty                    -> removed
+ *   /x/drop/sub    dir, empty                    -> removed (whole chain)
+ *   /x/link        dir, holds a symlink only     -> kept (symlink is content)
+ */
+static void test_empty_dirs_removed(void)
+{
+    char base[64]; tmpdir(base, sizeof base);
+    sqlite3 *db = open_temp_catalog(base);
+
+    ins_version(db, "/x",           FK_DIR,     0, 1, -1);
+    ins_version(db, "/x/keep",      FK_DIR,     0, 1, -1);
+    ins_version(db, "/x/keep/f",    FK_REG,   100, 1, -1);
+    ins_version(db, "/x/keep/deep", FK_DIR,     0, 1, -1);
+    ins_version(db, "/x/keep/deep/g", FK_REG, 100, 1, -1);
+    ins_version(db, "/x/drop",      FK_DIR,     0, 1, -1);
+    ins_version(db, "/x/drop/sub",  FK_DIR,     0, 1, -1);
+    ins_version(db, "/x/link",      FK_DIR,     0, 1, -1);
+    ins_version(db, "/x/link/s",    FK_SYMLINK, 0, 1, -1);
+
+    CHECKEQ_INT(prune_empty_dirs(db), 2);   /* /x/drop and /x/drop/sub only */
+
+    CHECKEQ_INT(have_version(db, "/x"),             1);
+    CHECKEQ_INT(have_version(db, "/x/keep"),        1);
+    CHECKEQ_INT(have_version(db, "/x/keep/deep"),   1);
+    CHECKEQ_INT(have_version(db, "/x/link"),        1);
+    CHECKEQ_INT(have_version(db, "/x/drop"),        0);
+    CHECKEQ_INT(have_version(db, "/x/drop/sub"),    0);
+
+    /* file and symlink versions are never touched */
+    CHECKEQ_INT(have_version(db, "/x/keep/f"),      1);
+    CHECKEQ_INT(have_version(db, "/x/keep/deep/g"), 1);
+    CHECKEQ_INT(have_version(db, "/x/link/s"),      1);
+
+    sqlite3_close(db);
+    rmtree_local(base);
+}
+
+/*
+ * Path-boundary guard (the same hazard test_sweep.c covers for scoped
+ * deletion): /x/proj2's file must not keep the empty /x/proj alive, and
+ * /x/proj's presence must not drag /x/proj2 down with it.
+ */
+static void test_empty_dirs_respect_path_boundaries(void)
+{
+    char base[64]; tmpdir(base, sizeof base);
+    sqlite3 *db = open_temp_catalog(base);
+
+    ins_version(db, "/x",           FK_DIR,   0, 1, -1);
+    ins_version(db, "/x/proj",      FK_DIR,   0, 1, -1);   /* empty */
+    ins_version(db, "/x/proj2",     FK_DIR,   0, 1, -1);   /* has content */
+    ins_version(db, "/x/proj2/f",   FK_REG, 100, 1, -1);
+
+    CHECKEQ_INT(prune_empty_dirs(db), 1);
+
+    CHECKEQ_INT(have_version(db, "/x/proj"),  0);
+    CHECKEQ_INT(have_version(db, "/x/proj2"), 1);
+    CHECKEQ_INT(have_version(db, "/x"),       1);
+
+    sqlite3_close(db);
+    rmtree_local(base);
+}
+
+/*
+ * A files row pointing at a removed directory version must be cleared, not
+ * left dangling: an empty directory that still exists on disk keeps its files
+ * row (so the scanner does not treat it as new) but loses version_id.
+ */
+static void test_empty_dirs_clear_file_version_ref(void)
+{
+    char base[64]; tmpdir(base, sizeof base);
+    sqlite3 *db = open_temp_catalog(base);
+
+    ins_version(db, "/x/empty", FK_DIR, 0, 1, -1);
+    long long vk = ins_version(db, "/x/full",  FK_DIR, 0, 1, -1);
+    ins_version(db, "/x/full/f", FK_REG, 100, 1, -1);
+
+    long long fd = ins_file(db, "/x/empty", FK_DIR, 0, 0, 0, 0, 0, 0, 0, FS_CLEAN, 1);
+    long long fk = ins_file(db, "/x/full",  FK_DIR, 0, 0, 0, 0, 0, 0, 0, FS_CLEAN, 1);
+    db_exec(db, "UPDATE files SET version_id=(SELECT id FROM versions "
+                "WHERE versions.path=files.path)");
+
+    CHECKEQ_INT(prune_empty_dirs(db), 1);
+
+    sqlite3_stmt *st;
+    sqlite3_prepare_v2(db, "SELECT version_id FROM files WHERE id=?", -1, &st, NULL);
+    sqlite3_bind_int64(st, 1, fd);
+    CHECK(sqlite3_step(st) == SQLITE_ROW);
+    CHECKEQ_INT(sqlite3_column_type(st, 0), SQLITE_NULL);   /* cleared */
+    sqlite3_finalize(st);
+
+    sqlite3_prepare_v2(db, "SELECT version_id FROM files WHERE id=?", -1, &st, NULL);
+    sqlite3_bind_int64(st, 1, fk);
+    CHECK(sqlite3_step(st) == SQLITE_ROW);
+    CHECKEQ_INT(sqlite3_column_int64(st, 0), vk);           /* untouched */
+    sqlite3_finalize(st);
+
+    CHECKEQ_INT(have_version(db, "/x/empty"), 0);
+
+    sqlite3_close(db);
+    rmtree_local(base);
+}
+
+/* No empty directories -> no deletions, and the call is idempotent. */
+static void test_empty_dirs_noop(void)
+{
+    char base[64]; tmpdir(base, sizeof base);
+    sqlite3 *db = open_temp_catalog(base);
+
+    ins_version(db, "/x",     FK_DIR,   0, 1, -1);
+    ins_version(db, "/x/f",   FK_REG, 100, 1, -1);
+
+    CHECKEQ_INT(prune_empty_dirs(db), 0);
+    CHECKEQ_INT(prune_empty_dirs(db), 0);
+    CHECKEQ_INT(have_version(db, "/x"), 1);
+
+    sqlite3_close(db);
+    rmtree_local(base);
+}
+
 /* ---- main ---- */
 
 int main(void)
@@ -372,5 +511,9 @@ int main(void)
     test_newest_always_kept();
     test_no_keep_rules_dies();
     test_blob_gc_reachability_sql();
+    test_empty_dirs_removed();
+    test_empty_dirs_respect_path_boundaries();
+    test_empty_dirs_clear_file_version_ref();
+    test_empty_dirs_noop();
     TEST_DONE("test_prune");
 }

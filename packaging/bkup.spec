@@ -3,7 +3,7 @@
 %{!?_sysctldir: %global _sysctldir /usr/lib/sysctl.d}
 
 Name:           bkup
-Version:        0.7.2
+Version:        0.8.0
 Release:        1%{?dist}
 Summary:        Encrypted deduplicating backup tool (CLI + daemon + GUI)
 
@@ -118,6 +118,8 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Fri Aug 07 2026 dhugh <dhugh100@users.noreply.github.com> - 0.8.0-1
+- Release 0.8.0
 * Tue Aug 04 2026 dhugh <dhugh100@users.noreply.github.com> - 0.7.2-1
 - Release 0.7.2
 * Tue Aug 04 2026 dhugh <dhugh100@users.noreply.github.com> - 0.7.1-1

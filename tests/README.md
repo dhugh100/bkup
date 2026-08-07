@@ -25,7 +25,10 @@ scratch space before the next one. Exit status is nonzero if any test failed
 - **Offline round-trip (fake transport)** -- `test_roundtrip` drives the real
   backup/restore/dedup/versioning/fetch-catalog code through the TR_LOCAL
   filesystem transport (no SFTP). This is the closest offline analogue to a real
-  backup.
+  backup. `test_prune_gc` drives `cmd_prune` over the same transport and checks
+  both halves of its "remove what is now empty" pass: directory versions with
+  nothing beneath them leave the catalog, and emptied `blobs/<2 hex>` fan-out
+  directories are rmdir'd on the server.
 
 ## Sanitizers
 
