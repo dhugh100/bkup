@@ -32,6 +32,15 @@ static int usage(void)
     return 2;
 }
 
+/* Commands that only read local state. They change neither the repo nor the
+   catalog, so there is no event worth refusing to run over -- which is what
+   lets a normal user list snapshots without write access to the daemon's
+   root-owned event log. */
+static int read_only_cmd(const char *cmd)
+{
+    return !strcmp(cmd, "snapshots") || !strcmp(cmd, "sources");
+}
+
 int main(int argc, char **argv)
 {
     crypto_global_init();
@@ -56,10 +65,15 @@ int main(int argc, char **argv)
     if (source) ctx_use_user(c, source);
 
     /* A backup with no durable record is the failure we are guarding against,
-       so refuse to run if the event log cannot be opened. */
-    if (log_open_file(c->cfg->log_file) != 0)
+       so refuse to run if the event log cannot be opened -- except for the
+       read-only commands, which record nothing worth keeping and would
+       otherwise be root-only on a host whose log the daemon owns. Without the
+       file open, log output falls back to stderr; keep the bookkeeping lines
+       out of a listing that a user is reading. */
+    int logged = (log_open_file(c->cfg->log_file) == 0);
+    if (!logged && !read_only_cmd(cmd))
         die("cannot open log file %s: %s", c->cfg->log_file, strerror(errno));
-    log_info("cli: %s '%s' started", cmd, c->src->name);
+    if (logged) log_info("cli: %s '%s' started", cmd, c->src->name);
 
     int rc;
 
@@ -78,8 +92,10 @@ int main(int argc, char **argv)
     else if (!strcmp(cmd, "sources"))       rc = cmd_sources(c, sub_argc, sub_argv);
     else { ctx_free(c); return usage(); }
 
-    if (rc == 0) log_info("cli: %s '%s' completed", cmd, c->src->name);
-    else         log_warn("cli: %s '%s' failed (rc=%d)", cmd, c->src->name, rc);
+    if (logged) {
+        if (rc == 0) log_info("cli: %s '%s' completed", cmd, c->src->name);
+        else         log_warn("cli: %s '%s' failed (rc=%d)", cmd, c->src->name, rc);
+    }
 
     ctx_free(c);
     return rc;

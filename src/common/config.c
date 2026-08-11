@@ -14,14 +14,6 @@
 #include "util.h"
 #include "log.h"
 
-static char *default_config_path(void)
-{
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg && xdg[0])
-        return path_join(xdg, "bkup/bkup.conf");
-    return path_expand("~/.config/bkup/bkup.conf");
-}
-
 static char *current_user(void)
 {
     const char *u = getenv("USER");
@@ -246,9 +238,24 @@ static void finalize_user(Config *c, User *s, int flat)
     apply_global_prune(c, s);
 }
 
+/* Overridden only by the tests (see config_set_default_path in config.h). */
+static const char *g_default_config = BK_SYSTEM_CONFIG;
+
+const char *config_default_path(void)
+{
+    return g_default_config;
+}
+
+void config_set_default_path(const char *path)
+{
+    g_default_config = path ? path : BK_SYSTEM_CONFIG;
+}
+
 Config *config_load(const char *path)
 {
-    char *resolved = path ? xstrdup(path) : default_config_path();
+    /* Without -c there is one place to look: the system config the daemon
+       reads. A per-user config is still reachable, by naming it with -c. */
+    char *resolved = path ? xstrdup(path) : xstrdup(config_default_path());
     FILE *f = fopen(resolved, "r");
     if (!f) die("cannot open config %s", resolved);
 

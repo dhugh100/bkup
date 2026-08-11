@@ -37,8 +37,11 @@ int log_open_file(const char *path)
     if (!path || !path[0]) { errno = EINVAL; return -1; }
     make_parent_dir(path);
     FILE *f = fopen(path, "a");
-    if (!f) return -1;              /* errno set by fopen; caller treats as fatal */
-    /* Group-writable so a non-root CLI run can append to the daemon's log. */
+    if (!f) return -1;              /* errno set by fopen; caller decides */
+    /* Group-writable, so append access can be granted by group membership.
+       The daemon creates the file root:root, so an ordinary user still cannot
+       write it; the read-only CLI commands fall back to stderr rather than
+       fail (see read_only_cmd in src/cli/main.c). */
     fchmod(fileno(f), 0664);
     setvbuf(f, NULL, _IOLBF, 0);    /* flush each line for crash durability */
     pthread_mutex_lock(&log_mu);

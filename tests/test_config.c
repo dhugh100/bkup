@@ -4,8 +4,8 @@
  * Writes temp .conf files to a tmpdir and calls config_load(path).  Covers
  * flat / sectioned configs, global excludes, keep-* defaults, bool parsing,
  * port, exclude semantics (basename vs fullpath, tilde expansion), subtree
- * exclusion, continuous-exclude, config_find_user, and the die() on a missing
- * required field.
+ * exclusion, continuous-exclude, config_find_user, the config_load(NULL)
+ * default-path branch, and the die() on a missing required field.
  */
 
 #include <stdio.h>
@@ -367,6 +367,35 @@ static void test_find_user(void)
     rmtree_local(dir);
 }
 
+/* ---- config_load(NULL) resolves the default path ---- */
+
+static void test_default_path(void)
+{
+    /* The shipped default is the system config; nothing else may creep in. */
+    CHECKEQ_STR(config_default_path(), BK_SYSTEM_CONFIG);
+
+    /* Point the default at a temp file and load with no explicit path, so the
+       NULL branch is exercised without needing to write /etc/bkup.conf. */
+    char dir[64]; tmpdir(dir, sizeof dir);
+    char *path = write_conf(dir,
+        "server = myserver\n"
+        "repo = /backups\n"
+        "source = /home/testuser\n");
+    config_set_default_path(path);
+
+    Config *c = config_load(NULL);
+    CHECK(c != NULL);
+    CHECKEQ_STR(c->server, "myserver");
+    CHECK(c->nusers == 1);
+    CHECKEQ_STR(c->users[0].sources[0], "/home/testuser");
+    config_free(c);
+
+    config_set_default_path(NULL);         /* restore the built-in default */
+    CHECKEQ_STR(config_default_path(), BK_SYSTEM_CONFIG);
+    free(path);
+    rmtree_local(dir);
+}
+
 /* ---- missing required field (server) -> die() ---- */
 
 static char g_die_path[256];
@@ -409,6 +438,7 @@ int main(void)
     test_user_excluded_subtree();
     test_user_continuous_excluded();
     test_find_user();
+    test_default_path();
     test_missing_server_dies();
     TEST_DONE("test_config");
 }

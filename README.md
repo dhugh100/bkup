@@ -348,6 +348,11 @@ The systemd unit (`bkupd.service`) starts `bkupd -c /etc/bkup.conf`. The
 scheduler inside the daemon reads backup/prune schedules from the config and runs
 them in a single background thread; no cron entries are needed.
 
+The CLI and GUI default to `/etc/bkup.conf` too (there is no per-user config
+path; `-c` names one if you need it), so a configured user can run
+`bkup snapshots` and `bkup sources` with no flags and no `sudo`. Every other
+command needs root, for the event log and the key file.
+
 ## Limitations
 
 **Linux only.** The filesystem watcher depends on `fanotify` and

@@ -1,9 +1,11 @@
-# %%{_sysctldir} is provided by systemd-rpm-macros; fall back if it is missing
-# from the build environment so the spec stays buildable everywhere.
+# %%{_sysctldir} and %%{_presetdir} are provided by systemd-rpm-macros; fall
+# back if they are missing from the build environment so the spec stays
+# buildable everywhere.
 %{!?_sysctldir: %global _sysctldir /usr/lib/sysctl.d}
+%{!?_presetdir: %global _presetdir /usr/lib/systemd/system-preset}
 
 Name:           bkup
-Version:        0.8.0
+Version:        0.9.0
 Release:        1%{?dist}
 Summary:        Encrypted deduplicating backup tool (CLI + daemon + GUI)
 
@@ -13,6 +15,8 @@ Source0:        %{name}-%{version}.tar.gz
 # Raises fs.fanotify.max_user_marks for bkupd's recursive directory watches.
 Source1:        60-bkupd-fanotify.conf
 Source2:        bkupd.service
+# Enables bkupd.service when %%systemd_post runs systemctl preset.
+Source3:        80-bkupd.preset
 
 BuildRequires:  gcc
 BuildRequires:  make
@@ -38,8 +42,10 @@ CLI, the bkupd root daemon, and the bkup-gui restore browser into
 loads the module and runs restorecon so the daemon binary and per-user catalog
 paths are labeled automatically -- no manual "make relabel" step.
 
-This package installs the bkupd.service unit but does NOT enable it or manage
-/etc/bkup.conf; those remain under administrator control.
+This package installs the bkupd.service unit and ships a preset that enables it
+on install, so the daemon comes back after a reboot. It does not start the
+daemon and does not manage /etc/bkup.conf; those remain under administrator
+control.
 
 %prep
 %setup -q
@@ -58,6 +64,8 @@ install -D -m 0644 %{SOURCE1} \
         %{buildroot}%{_sysctldir}/60-bkupd-fanotify.conf
 install -D -m 0644 %{SOURCE2} \
         %{buildroot}%{_unitdir}/bkupd.service
+install -D -m 0644 %{SOURCE3} \
+        %{buildroot}%{_presetdir}/80-bkupd.preset
 install -D -m 0755 doSetup.sh \
         %{buildroot}/usr/local/bin/bkup-setup
 
@@ -70,6 +78,7 @@ install -D -m 0755 doSetup.sh \
 %{_datadir}/selinux/packages/%{name}/bkupd.pp
 %{_sysctldir}/60-bkupd-fanotify.conf
 %{_unitdir}/bkupd.service
+%{_presetdir}/80-bkupd.preset
 /usr/local/bin/bkup-setup
 
 # Load (install or upgrade) the policy module and relabel the daemon binary plus
@@ -96,7 +105,8 @@ echo ""
 echo "==> bkup installed. Next steps:"
 echo "    1. Create /etc/bkup.conf (see 'man bkup' or config.md)."
 echo "    2. Run 'sudo bkup-setup' to set the passphrase and init each user's repo."
-echo "    3. Run 'sudo systemctl enable --now bkupd' to start the daemon."
+echo "    3. Run 'sudo systemctl start bkupd' to start the daemon."
+echo "       (It is already enabled for boot by the shipped preset.)"
 echo ""
 fi
 
@@ -118,6 +128,10 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Tue Aug 11 2026 dhugh <dhugh100@users.noreply.github.com> - 0.9.0-1
+- Release 0.9.0
+* Sun Aug 09 2026 dhugh <dhugh100@users.noreply.github.com> - 0.8.0-2
+- Ship a systemd preset enabling bkupd.service on install
 * Fri Aug 07 2026 dhugh <dhugh100@users.noreply.github.com> - 0.8.0-1
 - Release 0.8.0
 * Tue Aug 04 2026 dhugh <dhugh100@users.noreply.github.com> - 0.7.2-1

@@ -37,7 +37,9 @@
 #define DEBOUNCE_MS       2000      /* quiet period before flushing a root */
 #define MAX_PENDING_MS    30000     /* cap: flush even under steady activity */
 
-/* events that should trigger a rescan of the affected subtree */
+/* Events that should trigger a rescan of the affected subtree. FAN_DELETE_SELF
+   and FAN_MOVE_SELF are requested but discarded on arrival -- see handle_events
+   for why they cannot be resolved to a path. */
 #define WATCH_MASK (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO | \
                     FAN_CLOSE_WRITE | FAN_ATTRIB | FAN_DELETE_SELF | \
                     FAN_MOVE_SELF | FAN_ONDIR)
@@ -325,6 +327,19 @@ static void handle_events(Watch *w, const char *buf, size_t len)
             m = FAN_EVENT_NEXT(m, len);
             continue;
         }
+        /* Self events (the marked object itself was deleted or moved) carry a
+           FAN_EVENT_INFO_TYPE_FID record naming that object, not its parent.
+           For FAN_DELETE_SELF the inode is already unlinked, so resolving the
+           handle always fails with ESTALE -- counting that as a drop would make
+           every rmdir of a watched dir look like a lost change. Skip them: the
+           same deletion/move arrives as FAN_DELETE / FAN_MOVED_FROM on the
+           parent's mark, with a resolvable parent handle plus the entry name,
+           and that is what queues the rescan. (The one case not covered is
+           deleting a source root itself, whose parent we never marked.) */
+        if (m->mask & (FAN_DELETE_SELF | FAN_MOVE_SELF)) {
+            m = FAN_EVENT_NEXT(m, len);
+            continue;
+        }
         /* Walk the info records following the fixed metadata; act on the first
            one that carries a directory fid + name (DFID_NAME / DFID / FID). */
         const char *p   = (const char *)m + sizeof *m;
@@ -346,9 +361,10 @@ static void handle_events(Watch *w, const char *buf, size_t len)
                 if (resolve_path(w, fid, name, path, sizeof path) == 0) {
                     /* Removal events name an object that is already gone;
                        note_path() folds the parent dir so its rescan can
-                       record the deletion (see note_path). */
-                    int removed = (m->mask & (FAN_DELETE | FAN_MOVED_FROM |
-                                   FAN_DELETE_SELF | FAN_MOVE_SELF)) != 0;
+                       record the deletion (see note_path). Self events never
+                       get here (skipped above), so only the parent-reported
+                       removals matter. */
+                    int removed = (m->mask & (FAN_DELETE | FAN_MOVED_FROM)) != 0;
                     note_path(w, path, removed);
                     /* A new directory entered the tree (created or moved in):
                        extend coverage into it, since inode marks don't cascade.

@@ -61,15 +61,16 @@ The GUI and CLI both accept `-s SOCKET` to point at a non-default socket.
 ### Location
 
 `bkupd` requires an explicit `-c CONFIG` argument. The `bkup` CLI and the GUI
-look for the config at:
+load `/etc/bkup.conf` unless `-c CONFIG` names another file (CLI only).
 
-1. The path given with `-c CONFIG` (CLI only).
-2. `$XDG_CONFIG_HOME/bkup/bkup.conf` if `$XDG_CONFIG_HOME` is set.
-3. `~/.config/bkup/bkup.conf` otherwise.
+There is deliberately no per-user default. A flat/single-user config is still
+supported -- name it with `-c`, which is how the test fixtures drive one --
+but nothing on an installed host ever writes a per-user copy, so searching for
+one only produced a default that could never resolve.
 
-For the system daemon the convention is `/etc/bkup.conf`. It should be owned
-by `root:root` and mode `0644`: it contains no secrets (the passphrase is in a
-separate file), so it can be world-readable if needed.
+`/etc/bkup.conf` should be owned by `root:root` and mode `0644`: it contains no
+secrets (the passphrase is in a separate file), so it must stay readable by the
+users who run the CLI.
 
 ### Syntax
 
@@ -556,8 +557,7 @@ bkup [-c CONFIG] [-U USER] COMMAND [ARGS]
 ### Global flags
 
 **`-c CONFIG`**  
-Config file path. If omitted, uses `$XDG_CONFIG_HOME/bkup/bkup.conf` or
-`~/.config/bkup/bkup.conf`.
+Config file path. Defaults to `/etc/bkup.conf`.
 
 **`-U USER`**  
 Select a specific user section by name. If omitted, the CLI selects the section
@@ -570,7 +570,30 @@ when the flat-mode default is not what you want.
 Print usage and exit.
 
 Every CLI run opens the event log before doing anything. If the log cannot be
-opened the command aborts.
+opened the command aborts -- a backup with no durable record is exactly the
+failure this guards against.
+
+The two read-only commands, `snapshots` and `sources`, are exempt: they change
+neither the repo nor the catalog, so there is nothing about them worth
+refusing to run over. If the log cannot be opened they proceed with output on
+stderr instead, and skip the start/finish log lines. This is what lets a normal
+user run `bkup snapshots` on a host where `bkupd` runs as root and owns
+`/var/log/bkup/bkup.log`; the log stays root-only, which keeps the audit trail
+trustworthy.
+
+### Running as a normal user
+
+On a daemon-managed host, a user with a `[user "name"]` section can run:
+
+```sh
+bkup snapshots      # their own snapshots
+bkup sources        # what the config parsed to
+```
+
+with no flags and no `sudo`: the config defaults to `/etc/bkup.conf` and the
+catalog is `~/.local/share/bkup/<name>.db`, which the user owns. Everything
+else (`backup`, `restore`, `prune`, `verify`, `init`, `fetch-catalog`) needs
+root, both for the event log and to read `key_file`.
 
 ---
 

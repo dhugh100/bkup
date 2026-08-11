@@ -1,0 +1,9 @@
+# Enable bkupd on install. Without a preset, %systemd_post falls through to
+# 99-default-disable.preset ("disable *") and the daemon is left off, so a
+# remove/reinstall silently drops the unit's WantedBy symlink and the host
+# comes up without a backup daemon at the next reboot.
+#
+# This applies when systemctl preset runs -- a fresh install, or an explicit
+# "systemctl preset bkupd.service". It does not start the daemon, and it does
+# not re-enable an existing install on upgrade.
+enable bkupd.service

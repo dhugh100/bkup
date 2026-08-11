@@ -1,6 +1,10 @@
 #ifndef BK_CONFIG_H
 #define BK_CONFIG_H
 
+/* The system config: what bkupd is pointed at by convention, and the config
+   the CLI and GUI load when no -c is given. */
+#define BK_SYSTEM_CONFIG "/etc/bkup.conf"
+
 enum { SCOPE_USER, SCOPE_SYSTEM };
 
 /* One user's backup set: the sources/excludes/schedule/retention for a single
@@ -59,6 +63,16 @@ typedef struct {
 /* Load config from `path` (or the default location if NULL). Aborts via die()
    on a missing required field or unreadable file. */
 Config *config_load(const char *path);
+
+/* The path config_load(NULL) resolves to: BK_SYSTEM_CONFIG unless overridden.
+   The setter is a test seam -- it exists so the default-path branch can be
+   exercised without writing to /etc, and nothing in the shipped binaries calls
+   it. Deliberately not wired to an env var or a flag: which config a root-run
+   CLI loads must not be settable from the ambient environment. `path` is
+   borrowed, not copied, and must outlive the config_load(NULL) call; NULL
+   restores the built-in default. */
+const char *config_default_path(void);
+void        config_set_default_path(const char *path);
 void    config_free(Config *c);
 
 /* Find a user section by name, or NULL. */

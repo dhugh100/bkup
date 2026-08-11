@@ -83,6 +83,7 @@ jobs:
           tar -czf ~/rpmbuild/SOURCES/${TARNAME}.tar.gz -C /tmp "$TARNAME"
           cp packaging/60-bkupd-fanotify.conf ~/rpmbuild/SOURCES/
           cp bkupd.service ~/rpmbuild/SOURCES/
+          cp packaging/80-bkupd.preset ~/rpmbuild/SOURCES/
           cp packaging/bkup.spec ~/rpmbuild/SPECS/
 
       - name: Build RPM

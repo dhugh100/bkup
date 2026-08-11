@@ -23,6 +23,7 @@
 !packaging/
 !packaging/bkup.spec
 !packaging/60-bkupd-fanotify.conf
+!packaging/80-bkupd.preset
 
 # GitHub Actions: builds the RPM in a clean container on tag push.
 !.github/
