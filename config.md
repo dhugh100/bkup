@@ -552,6 +552,7 @@ the configured schedules.
 
 ```
 bkup [-c CONFIG] [-U USER] COMMAND [ARGS]
+bkup --version
 ```
 
 ### Global flags
@@ -569,9 +570,17 @@ when the flat-mode default is not what you want.
 **`-h` / `--help`**  
 Print usage and exit.
 
-Every CLI run opens the event log before doing anything. If the log cannot be
-opened the command aborts -- a backup with no durable record is exactly the
-failure this guards against.
+**`--version`**  
+Print the version (`bkup X.Y.Z`) and exit. Answered before the config is read,
+so it works on a host with no `/etc/bkup.conf`. The string is compiled in from
+`src/common/version.h`, which `packaging/doRelease.sh` bumps alongside
+`Version:` in the spec, so it always matches the installed package.
+
+Every CLI run resolves the command name first: an unknown command prints usage
+and exits 2 without touching the config or the log. A recognized command then
+opens the event log before doing anything, and aborts if the log cannot be
+opened -- a backup with no durable record is exactly the failure this guards
+against.
 
 The two read-only commands, `snapshots` and `sources`, are exempt: they change
 neither the repo nor the catalog, so there is nothing about them worth

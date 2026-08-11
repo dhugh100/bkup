@@ -5,11 +5,13 @@
 #include "commands.h"
 #include "common/crypto.h"
 #include "common/log.h"
+#include "common/version.h"
 
 static int usage(void)
 {
     fprintf(stderr,
         "usage: bkup [-c CONFIG] [-U USER] COMMAND [ARGS]\n"
+        "       bkup --version\n"
         "\n"
         "commands:\n"
         "  init [--force]               create the repo and local catalog\n"
@@ -32,14 +34,27 @@ static int usage(void)
     return 2;
 }
 
-/* Commands that only read local state. They change neither the repo nor the
-   catalog, so there is no event worth refusing to run over -- which is what
-   lets a normal user list snapshots without write access to the daemon's
-   root-owned event log. */
-static int read_only_cmd(const char *cmd)
-{
-    return !strcmp(cmd, "snapshots") || !strcmp(cmd, "sources");
-}
+/* `read_only` marks commands that only read local state. They change neither
+   the repo nor the catalog, so there is no event worth refusing to run over --
+   which is what lets a normal user list snapshots without write access to the
+   daemon's root-owned event log. */
+static const struct {
+    const char *name;
+    int       (*fn)(Ctx *, int, char **);
+    int         read_only;
+} commands[] = {
+    { "init",          cmd_init,          0 },
+    { "backup",        cmd_backup,        0 },
+    { "continuous",    cmd_continuous,    0 },
+    { "spot",          cmd_continuous,    0 },   /* deprecated alias */
+    { "restore",       cmd_restore,       0 },
+    { "verify",        cmd_verify,        0 },
+    { "snapshots",     cmd_snapshots,     1 },
+    { "fetch-catalog", cmd_fetch_catalog, 0 },
+    { "prune",         cmd_prune,         0 },
+    { "sources",       cmd_sources,       1 },
+};
+#define NCOMMANDS (sizeof commands / sizeof commands[0])
 
 int main(int argc, char **argv)
 {
@@ -53,6 +68,8 @@ int main(int argc, char **argv)
         /* -U selects the user section; -S is the deprecated spelling. */
         else if ((!strcmp(argv[i], "-U") || !strcmp(argv[i], "-S")) && i + 1 < argc) { source = argv[i + 1]; i += 2; }
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) return usage();
+        /* Answered before ctx_new so it works with no config file present. */
+        else if (!strcmp(argv[i], "--version")) { printf("bkup %s\n", BKUP_VERSION); return 0; }
         else break;
     }
     if (i >= argc) return usage();
@@ -60,6 +77,13 @@ int main(int argc, char **argv)
     const char *cmd = argv[i++];
     int sub_argc = argc - i;
     char **sub_argv = argv + i;
+
+    /* Resolve the command before loading config or opening the log, so an
+       unknown command (or a mistyped flag, which lands here as the command)
+       prints usage rather than dying on a log the caller cannot open. */
+    size_t ci = 0;
+    while (ci < NCOMMANDS && strcmp(cmd, commands[ci].name)) ci++;
+    if (ci == NCOMMANDS) return usage();
 
     Ctx *c = ctx_new(config);
     if (source) ctx_use_user(c, source);
@@ -71,26 +95,13 @@ int main(int argc, char **argv)
        file open, log output falls back to stderr; keep the bookkeeping lines
        out of a listing that a user is reading. */
     int logged = (log_open_file(c->cfg->log_file) == 0);
-    if (!logged && !read_only_cmd(cmd))
+    if (!logged && !commands[ci].read_only)
         die("cannot open log file %s: %s", c->cfg->log_file, strerror(errno));
     if (logged) log_info("cli: %s '%s' started", cmd, c->src->name);
 
-    int rc;
+    if (!strcmp(cmd, "spot")) log_warn("cli: `spot` is deprecated; use `continuous`");
 
-    if (!strcmp(cmd, "init"))               rc = cmd_init(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "backup"))        rc = cmd_backup(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "continuous"))    rc = cmd_continuous(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "spot")) {        /* deprecated alias for `continuous` */
-        log_warn("cli: `spot` is deprecated; use `continuous`");
-        rc = cmd_continuous(c, sub_argc, sub_argv);
-    }
-    else if (!strcmp(cmd, "restore"))       rc = cmd_restore(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "verify"))        rc = cmd_verify(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "snapshots"))     rc = cmd_snapshots(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "fetch-catalog")) rc = cmd_fetch_catalog(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "prune"))         rc = cmd_prune(c, sub_argc, sub_argv);
-    else if (!strcmp(cmd, "sources"))       rc = cmd_sources(c, sub_argc, sub_argv);
-    else { ctx_free(c); return usage(); }
+    int rc = commands[ci].fn(c, sub_argc, sub_argv);
 
     if (logged) {
         if (rc == 0) log_info("cli: %s '%s' completed", cmd, c->src->name);
