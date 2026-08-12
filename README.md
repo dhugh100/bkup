@@ -288,6 +288,18 @@ from the daemon (log lines, entries, done) while a long-running operation is in
 progress; non-blocking queries (status, source list, directory listing) complete
 immediately without holding the op mutex.
 
+Everything else serializes through a single host-wide op mutex, so a request can
+arrive while a scheduled backup, continuous backup or catalog-push holds it. A
+request may set `"wait": N` to bound how long it queues: `0` fails at once with
+`busy`, and the default is 120s, chosen against the seconds-long routine work --
+another user's full backup can hold the lock far longer. Waits are clamped to one
+hour, since each waiter parks a thread and an fd. When a request is about to
+block, the daemon first sends `{"event":"waiting","cmd":HOLDER,"wait":N}` so the
+caller can say why it is stopped rather than appear hung; on giving up it sends
+the `busy` error. After a wait the daemon re-checks that the caller is still
+connected before starting work, so a request abandoned mid-queue (Ctrl-C, closed
+window) is dropped instead of running a restore nobody is waiting for.
+
 ## Build
 
 Dependencies: `sqlite3 libzstd libsodium libssh2` (all three binaries) plus
@@ -313,6 +325,10 @@ Standalone harnesses in `tests/` exercise the dangerous paths:
 - `test_coalesce.c` -- common-ancestor coalescing logic
 - `test_catalog_push.c` -- catalog push round-trip
 - `test_catalog_chunk.c` -- chunked-catalog round-trip and dedup locality
+- `test_opwait.c` -- op-mutex admission: wait bound, waiting event, and dropping
+  a request whose caller disconnected while queued
+- `test_client.c` -- drives bin/bkup against a stub daemon: the request each
+  command builds, and how replies are reported
 
 Build and run one (example):
 
@@ -350,8 +366,23 @@ them in a single background thread; no cron entries are needed.
 
 The CLI and GUI default to `/etc/bkup.conf` too (there is no per-user config
 path; `-c` names one if you need it), so a configured user can run
-`bkup snapshots` and `bkup sources` with no flags and no `sudo`. Every other
-command needs root, for the event log and the key file.
+`bkup snapshots` and `bkup sources` with no flags and no `sudo`: those read only
+that user's own catalog.
+
+`backup`, `restore`, `verify` and `prune` cannot run in-process as a normal user
+-- they need the repo passphrase (`key_file`, root-only), an SSH identity for the
+storage server, and write access to the event log. Run without `sudo`, the CLI
+therefore sends them to `bkupd` over `/run/bkupd.sock` and streams the resulting
+events to the terminal, exactly as the GUI does. The daemon identifies the caller
+by peer uid, serves only that user's section, and forks+drops to the caller for
+restore writes, so recovering your own files needs no privilege and can only
+write where you could. `--wait SEC` bounds how long the request queues behind a
+running operation (see the IPC section).
+
+Two escapes from that routing: `-c CONFIG` runs the command locally against that
+config instead (a self-contained dev or test setup with its own key and log, as
+`mktest.sh` uses), and `--socket PATH` reaches a daemon started with `bkupd -s`.
+`init`, `fetch-catalog` and `continuous` have no daemon verb and remain root-only.
 
 ## Limitations
 

@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <pwd.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/socket.h>
 
 #include "ipc.h"
 #include "userstate.h"
@@ -22,8 +24,16 @@ static char g_busy_cmd[64] = "";
 /* How long an interactive command waits for the op mutex before reporting busy.
    Routine background work (a continuous backup, or the catalog-push that
    follows it) holds the lock for seconds, so a restore/list should queue behind
-   it rather than fail outright; the bound just guards against a wedged holder. */
+   it rather than fail outright; the bound just guards against a wedged holder.
+   This is only the default: a caller sets its own bound with a "wait" field
+   (0 = fail immediately), because a person at a terminal and a cron job want
+   opposite things here. Another user's *full* backup can hold the lock for far
+   longer than the routine work this default was chosen against. */
 #define OP_WAIT_SEC 120
+/* Ceiling on a caller-supplied wait. Each waiter parks a thread and an fd for
+   the duration (main.c spawns one detached thread per connection, unbounded),
+   so a client must not be able to ask to wait forever on a wedged holder. */
+#define OP_WAIT_MAX 3600
 /* Per-thread: does *this* thread currently hold g_op_mutex?  Lets a command
    release the mutex early -- before the slow Ctx teardown (which closes the
    SSH/SFTP session) and before the terminal "done" -- while keeping the
@@ -58,11 +68,16 @@ void ipc_op_unlock(void)
    pthread_cleanup_push so a fatal op still releases the op mutex AND frees the
    Ctx (closing its SSH/SFTP session) and the cmd string, instead of leaking
    them for the daemon's lifetime. release_op_mutex is idempotent, so an early
-   op_finish() release on the normal path is harmless. (config_path is freed at
-   the function's out: label, which every non-fatal path reaches.) */
+   op_finish() release on the normal path is harmless.
+
+   config_path is held by address, not by value: the eight early `goto out`
+   paths above the cleanup handler still have to free it themselves, so this
+   frees it and NULLs the caller's pointer, leaving the out: label's free() a
+   no-op rather than a double free. */
 typedef struct {
-    Ctx  *c;
-    char *cmd;
+    Ctx   *c;
+    char  *cmd;
+    char **config_path;
 } OpCleanup;
 
 static void op_cleanup(void *arg)
@@ -71,6 +86,7 @@ static void op_cleanup(void *arg)
     release_op_mutex(NULL);
     if (oc->c) ctx_free(oc->c);
     free(oc->cmd);
+    if (oc->config_path) { free(*oc->config_path); *oc->config_path = NULL; }
     oc->c = NULL;
     oc->cmd = NULL;
 }
@@ -104,88 +120,26 @@ static void conn_die(void)
     pthread_exit(NULL);
 }
 
+/* Is the caller still on the other end?  The protocol is one request per
+   connection, so a peek should find nothing pending: EAGAIN is the healthy
+   answer and a zero-length read means the client closed the socket. Pending
+   data would be unexpected, but it still proves the peer is there. */
+static int conn_alive(int fd)
+{
+    char b;
+    ssize_t r = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+    if (r > 0)  return 1;
+    if (r == 0) return 0;
+    return errno == EAGAIN || errno == EWOULDBLOCK;
+}
+
 /* ---- JSON helpers ---- */
 
-int ipc_readline(int fd, char *buf, size_t cap)
-{
-    size_t n = 0;
-    while (n < cap - 1) {
-        char c;
-        ssize_t r = read(fd, &c, 1);
-        if (r <= 0) return -1;
-        if (c == '\n') break;
-        buf[n++] = c;
-    }
-    buf[n] = '\0';
-    return 0;
-}
+/* The scalar getters, the escaper and the line I/O live in common/ipcwire.c so
+   the CLI client shares them; only this array reader is daemon-side, because
+   only requests carry arrays. */
 
-int ipc_send(int fd, const char *json)
-{
-    size_t len = strlen(json);
-    /* json + '\n' */
-    char *buf = malloc(len + 2);
-    if (!buf) return -1;
-    memcpy(buf, json, len);
-    buf[len]     = '\n';
-    buf[len + 1] = '\0';
-    size_t off = 0;
-    while (off < len + 1) {
-        ssize_t w = write(fd, buf + off, len + 1 - off);
-        if (w <= 0) { free(buf); return -1; }
-        off += (size_t)w;
-    }
-    free(buf);
-    return 0;
-}
 
-void ipc_json_escape(const char *src, char *dst, size_t cap)
-{
-    size_t i = 0, o = 0;
-    while (src[i] && o + 6 < cap) {
-        unsigned char c = (unsigned char)src[i++];
-        if      (c == '"')  { dst[o++] = '\\'; dst[o++] = '"';  }
-        else if (c == '\\') { dst[o++] = '\\'; dst[o++] = '\\'; }
-        else if (c < 0x20)  { o += (size_t)snprintf(dst + o, cap - o, "\\u%04x", c); }
-        else                 { dst[o++] = (char)c; }
-    }
-    dst[o] = '\0';
-}
-
-char *ipc_get_str(const char *json, const char *key)
-{
-    char needle[128];
-    snprintf(needle, sizeof needle, "\"%s\":", key);
-    const char *p = strstr(json, needle);
-    if (!p) return NULL;
-    p += strlen(needle);
-    while (*p == ' ') p++;
-    if (*p != '"') return NULL;
-    p++;
-    char buf[4096];
-    size_t n = 0;
-    while (*p && n < sizeof buf - 1) {
-        if (*p == '\\' && p[1] == '"') { buf[n++] = '"'; p += 2; }
-        else if (*p == '\\' && p[1] == '\\') { buf[n++] = '\\'; p += 2; }
-        else if (*p == '"') break;
-        else buf[n++] = *p++;
-    }
-    buf[n] = '\0';
-    return strdup(buf);
-}
-
-long long ipc_get_int(const char *json, const char *key, long long def)
-{
-    char needle[128];
-    snprintf(needle, sizeof needle, "\"%s\":", key);
-    const char *p = strstr(json, needle);
-    if (!p) return def;
-    p += strlen(needle);
-    while (*p == ' ') p++;
-    if (*p == '-' || (*p >= '0' && *p <= '9'))
-        return strtoll(p, NULL, 10);
-    return def;
-}
 
 /* Extract a JSON array of strings into out[] (each strdup'd; the caller frees up
    to the returned count). Returns how many were stored (<= max). A missing key
@@ -665,30 +619,65 @@ void *ipc_conn_thread(void *arg)
         goto out;
     }
 
-    /* All other commands serialize through the op mutex. Wait up to OP_WAIT_SEC
-       rather than failing immediately, so an interactive command queues behind a
-       short background catalog-push/continuous backup instead of erroring out. */
-    struct timespec deadline;
-    clock_gettime(CLOCK_REALTIME, &deadline);
-    deadline.tv_sec += OP_WAIT_SEC;
-    if (pthread_mutex_timedlock(&g_op_mutex, &deadline) != 0) {
-        char buf[128];
-        snprintf(buf, sizeof buf,
-                 "{\"event\":\"error\",\"msg\":\"busy: %s in progress\"}",
-                 g_busy_cmd);
-        ipc_send(fd, buf);
-        free(cmd);
-        goto out;
+    /* All other commands serialize through the op mutex. Try once without
+       blocking: on the uncontended path that is the whole story, and only when
+       it fails is there a wait to bound or to report. The holder's name is read
+       unlocked (as handle_status does) and escaped before it goes out -- it is
+       whatever command string some other client sent, so it is not trusted to
+       be JSON-safe. */
+    long long wait_sec = ipc_get_int(line, "wait", OP_WAIT_SEC);
+    if (wait_sec < 0) wait_sec = 0;
+    if (wait_sec > OP_WAIT_MAX) wait_sec = OP_WAIT_MAX;
+
+    int waited = 0;
+    if (pthread_mutex_trylock(&g_op_mutex) != 0) {
+        char holder[64], eholder[192], buf[320];
+        snprintf(holder, sizeof holder, "%s", g_busy_cmd);
+        ipc_json_escape(holder, eholder, sizeof eholder);
+
+        if (wait_sec > 0) {
+            /* Say so before blocking. Without this the caller just stops for up
+               to wait_sec with nothing on screen, which reads as a hang. */
+            snprintf(buf, sizeof buf,
+                     "{\"event\":\"waiting\",\"cmd\":\"%s\",\"wait\":%lld}",
+                     eholder, wait_sec);
+            ipc_send(fd, buf);
+
+            struct timespec deadline;
+            clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_sec += (time_t)wait_sec;
+            waited = pthread_mutex_timedlock(&g_op_mutex, &deadline) == 0;
+        }
+        if (!waited) {
+            snprintf(buf, sizeof buf,
+                     "{\"event\":\"error\",\"msg\":\"busy: %s in progress\"}",
+                     eholder);
+            ipc_send(fd, buf);
+            free(cmd);
+            goto out;
+        }
     }
     g_op_held = 1;
     g_busy = 1;
     snprintf(g_busy_cmd, sizeof g_busy_cmd, "%s", cmd);
 
+    /* A caller that gave up during the wait (Ctrl-C, closed window) would
+       otherwise have its request run in full on acquiring the lock -- a restore
+       writing files nobody is waiting for, holding the mutex against everyone
+       else. Only worth checking after an actual wait: without one, no time has
+       passed in which to disconnect. */
+    if (waited && !conn_alive(fd)) {
+        log_info("ipc: caller disconnected while waiting; '%s' not run", cmd);
+        release_op_mutex(NULL);
+        free(cmd);
+        goto out;
+    }
+
     /* If die() fires inside a cmd_*, conn_die() closes the fd and calls
        pthread_exit(), which runs op_cleanup: it releases the mutex and frees the
        Ctx + request strings before the thread terminates, so a fatal op leaks
        neither its SSH session nor cmd/config_path. */
-    OpCleanup oc = { .c = NULL, .cmd = cmd };
+    OpCleanup oc = { .c = NULL, .cmd = cmd, .config_path = &config_path };
     pthread_cleanup_push(op_cleanup, &oc);
 
     Ctx *c = ctx_new_uid(config_path, caller_uid);
@@ -704,7 +693,7 @@ void *ipc_conn_thread(void *arg)
     int logged_op = !strcmp(cmd, "backup") || !strcmp(cmd, "restore") ||
                     !strcmp(cmd, "verify") || !strcmp(cmd, "prune");
     if (logged_op)
-        log_info("gui: %s '%s' started (uid=%d)", cmd, c->src->name,
+        log_info("ipc: %s '%s' started (uid=%d)", cmd, c->src->name,
                  (int)caller_uid);
 
     if (strcmp(cmd, "list-snapshots") == 0) {
@@ -823,14 +812,14 @@ void *ipc_conn_thread(void *arg)
            again: clear any permanent latch so automatic work resumes without a
            restart. (Reached only if the op did not die() out via conn_die.) */
         userstate_enable(c->src->name);
-        log_info("gui: %s '%s' completed", cmd, c->src->name);
+        log_info("ipc: %s '%s' completed", cmd, c->src->name);
     }
 
     pthread_cleanup_pop(1);   /* op_cleanup: release mutex, free Ctx + cmd */
 
 out:
     if (cs.fd >= 0) close(cs.fd);
-    free(config_path);        /* freed once: every non-fatal path lands here */
+    free(config_path);        /* NULL here if op_cleanup already claimed it */
     tls_cs = NULL;
     return NULL;
 }

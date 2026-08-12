@@ -35,8 +35,12 @@ static User *user_for_name(Config *cfg, const char *uname)
 /* Load config without selecting a source (admin/scheduler enumerate users). */
 Ctx *ctx_new_nosel(const char *config_path)
 {
+    /* Load first, allocate second: config_load() die()s on a bad config, and in
+       the daemon that unwinds the connection thread -- a Ctx allocated ahead of
+       it would be abandoned with no owner to free it. */
+    Config *cfg = config_load(config_path);
     Ctx *c = xcalloc(1, sizeof *c);
-    c->cfg = config_load(config_path);
+    c->cfg = cfg;
     return c;
 }
 

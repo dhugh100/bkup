@@ -4,28 +4,15 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+/* The wire itself (socket path, line I/O, JSON scalars) is shared with the CLI
+   client; this header is the daemon-only half. */
+#include "common/ipcwire.h"
+
 typedef struct {
     int   fd;
     char *config_path;
     uid_t caller_uid;          /* peer uid (SO_PEERCRED): the user being served */
 } ConnArg;
-
-/* Read one '\n'-terminated line from fd into buf (NUL-terminated, newline
-   stripped).  Returns 0 on success, -1 on EOF or error. */
-int ipc_readline(int fd, char *buf, size_t cap);
-
-/* Write json + '\n' to fd.  Returns 0 on success, -1 on error. */
-int ipc_send(int fd, const char *json);
-
-/* Extract a string field from a flat JSON object.
-   Returns a malloc'd copy, or NULL if the key is absent.  Caller frees. */
-char *ipc_get_str(const char *json, const char *key);
-
-/* Extract an integer field.  Returns def if the key is absent. */
-long long ipc_get_int(const char *json, const char *key, long long def);
-
-/* Escape src for embedding in a JSON string value; writes into dst[cap]. */
-void ipc_json_escape(const char *src, char *dst, size_t cap);
 
 /* Connection thread entry point.  arg must be a malloc'd ConnArg*;
    the thread frees it before returning. */

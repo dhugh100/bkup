@@ -111,7 +111,14 @@ run_one() {
     name="$(basename "$src" .c)"
     num=$((num + 1))
 
-    if grep -q '"daemon/' "$src" 2>/dev/null; then
+    if [ "$name" = "test_opwait" ]; then
+        # Special: it #includes src/daemon/ipc.c to reach that file's static op
+        # mutex, so it needs the daemon set MINUS ipc.o -- linking ipc.o as well
+        # is a duplicate-symbol error. Its relative-path include also misses the
+        # '"daemon/' probe below, which is why this case comes first.
+        objs="$(printf '%s\n' $DAEMON_OBJS | grep -v '/ipc\.o$' | tr '\n' ' ')"
+        extra_libs="-lpthread"
+    elif grep -q '"daemon/' "$src" 2>/dev/null; then
         objs="$DAEMON_OBJS"; extra_libs="-lpthread"
     elif grep -q '"cli/' "$src" 2>/dev/null; then
         objs="$CLI_OBJS"; extra_libs=""

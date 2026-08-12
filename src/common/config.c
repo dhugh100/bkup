@@ -255,7 +255,13 @@ Config *config_load(const char *path)
 {
     /* Without -c there is one place to look: the system config the daemon
        reads. A per-user config is still reachable, by naming it with -c. */
-    char *resolved = path ? xstrdup(path) : xstrdup(config_default_path());
+    /* A stack copy, not a heap one: every die() below would abandon a heap
+       buffer. In the daemon die() unwinds the connection thread via conn_die()
+       rather than exiting the process, so a leak here is per-bad-request and
+       accumulates for the daemon's lifetime. */
+    char resolved[PATH_MAX];
+    snprintf(resolved, sizeof resolved, "%s",
+             path ? path : config_default_path());
     FILE *f = fopen(resolved, "r");
     if (!f) die("cannot open config %s", resolved);
 
@@ -335,7 +341,6 @@ Config *config_load(const char *path)
     for (int i = 0; i < c->nusers; i++)
         finalize_user(c, &c->users[i], !saw_section);
 
-    free(resolved);
     return c;
 }
 

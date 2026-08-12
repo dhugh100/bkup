@@ -40,11 +40,9 @@ static int socket_in_use(const char *sock_path)
 
 static char *default_sock_path(void)
 {
-    /* One root daemon serves every user, so the socket is a fixed shared path.
-       It is world-connectable; the daemon authorizes each peer via SO_PEERCRED
-       and serves only that user's section. */
+    /* Shared with the CLI client, which has no config to read the path from. */
     char *buf = xmalloc(256);
-    snprintf(buf, 256, "/run/bkupd.sock");
+    snprintf(buf, 256, "%s", BKUPD_SOCK_PATH);
     return buf;
 }
 

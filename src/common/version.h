@@ -6,6 +6,6 @@
    still the source of truth for the release number; this exists so the built
    binary can report it (`bkup --version`) without the spec, which the CI
    source tarball does not ship. */
-#define BKUP_VERSION "0.10.0"
+#define BKUP_VERSION "0.11.0"
 
 #endif
