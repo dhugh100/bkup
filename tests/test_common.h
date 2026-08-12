@@ -36,13 +36,22 @@
 
 /* Each test file must have:   static int fails;  */
 
-#define CHECK(cond) do { if (!(cond)) { \
+/*
+ * Assertions actually evaluated. Counted so that a test which asserts nothing
+ * cannot report success -- see TEST_REPORT. Defined here rather than in each
+ * test because every test is a single translation unit. A test with its own
+ * check() helper increments this inside that helper (test_client, test_opwait).
+ */
+static int tc_checks __attribute__((unused));
+
+#define CHECK(cond) do { tc_checks++; if (!(cond)) { \
     printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
     fails++; \
 } } while (0)
 
 #define CHECKEQ_INT(a, b) do { \
     long long _a = (long long)(a), _b = (long long)(b); \
+    tc_checks++; \
     if (_a != _b) { \
         printf("FAIL %s:%d: %s=%lld expected %s=%lld\n", \
                __FILE__, __LINE__, #a, _a, #b, _b); \
@@ -51,6 +60,7 @@
 
 #define CHECKEQ_STR(a, b) do { \
     const char *_sa = (a), *_sb = (b); \
+    tc_checks++; \
     if (!_sa || !_sb || strcmp(_sa, _sb) != 0) { \
         printf("FAIL %s:%d: %s=[%s] expected %s=[%s]\n", \
                __FILE__, __LINE__, \
@@ -59,17 +69,38 @@
     } } while (0)
 
 #define CHECK_MEMEQ(a, b, n) do { \
+    tc_checks++; \
     if (memcmp((a), (b), (n)) != 0) { \
         printf("FAIL %s:%d: memcmp(%s, %s, %zu) != 0\n", \
                __FILE__, __LINE__, #a, #b, (size_t)(n)); \
         fails++; \
     } } while (0)
 
-/* Print "name: OK" and return.  Must be the last statement in main(). */
-#define TEST_DONE(name) do { \
-    if (fails == 0) printf("%s: OK\n", (name)); \
-    return fails ? 1 : 0; \
+/*
+ * The end-of-test contract: every test must leave main() through one of these.
+ * They print the TEST-SUMMARY line run_tests.sh requires, and they treat "no
+ * assertions were evaluated" as a failure. Exiting 0 having checked nothing is
+ * a vacuous pass, and at the exit code alone it is indistinguishable from a
+ * real one -- so the count, not just the failure tally, decides.
+ *
+ * TEST_REPORT is for tests that keep their own counters (a descriptive
+ * check(cond, what) helper, say). TEST_DONE is the common case, using the
+ * file-scope `fails` and the counter above. Last statement in main().
+ */
+#define TEST_REPORT(name, nfails, nchecks) do { \
+    int _f = (nfails), _c = (nchecks); \
+    if (_c == 0) { \
+        printf("FAIL %s: no assertions were evaluated\n", (name)); \
+        if (_f == 0) _f = 1; \
+    } else if (_f == 0) { \
+        printf("%s: OK\n", (name)); \
+    } \
+    printf("TEST-SUMMARY checks=%d fails=%d\n", _c, _f); \
+    fflush(stdout); \
+    return _f ? 1 : 0; \
 } while (0)
+
+#define TEST_DONE(name) TEST_REPORT((name), fails, tc_checks)
 
 /* ---- Deterministic fill (splitmix64) ----------------------------------- */
 

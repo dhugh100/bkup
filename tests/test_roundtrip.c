@@ -235,6 +235,5 @@ int main(void)
     free(big);
     rmtree_local(base);
 
-    if (fails == 0) printf("test_roundtrip: OK\n");
-    return fails ? 1 : 0;
+    TEST_DONE("test_roundtrip");
 }

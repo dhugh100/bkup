@@ -2,10 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 #include "daemon/coalesce.h"
+#include "test_common.h"
 
 static int fails;
-#define CHECK(cond) do { if (!(cond)) { \
-    printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); fails++; } } while (0)
 
 static int ca_is(const char *a, const char *b, const char *want)
 {
@@ -56,6 +55,5 @@ int main(void)
     CHECK(coalesce_fold(&cz, "/other/z", "/other") == 0);
     CHECK(strcmp(cz.root, "/other/z") == 0);
 
-    if (fails == 0) printf("test_coalesce: OK\n");
-    return fails ? 1 : 0;
+    TEST_DONE("test_coalesce");
 }

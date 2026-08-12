@@ -27,23 +27,9 @@
 #include "common/compress.h"
 #include "common/types.h"
 #include "common/util.h"
+#include "test_common.h"
 
 static int fails;
-#define CHECK(cond) do { if (!(cond)) { \
-    printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); fails++; } } while (0)
-
-/* deterministic pseudo-random fill (splitmix64) so the test is reproducible */
-static void fill(uint8_t *b, size_t n, uint64_t seed)
-{
-    uint64_t s = seed;
-    for (size_t i = 0; i < n; i++) {
-        s += 0x9E3779B97F4A7C15ULL;
-        uint64_t z = s;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-        b[i] = (uint8_t)(z >> 31);
-    }
-}
 
 /* Chunk `buf` with CAT_PARAMS, append each chunk hash to *hashes; return count. */
 static uint32_t chunkit(const uint8_t *buf, size_t len, Buf *hashes)
@@ -174,5 +160,5 @@ int main(void)
     buf_free(&h2);
     buf_free(&rebuilt);
     free(db);
-    return fails ? 1 : 0;
+    TEST_DONE("test_catalog_chunk");
 }

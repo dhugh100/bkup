@@ -18,8 +18,13 @@ void       transport_disconnect(Transport *t);
    (root acts as a chroot). No network, no SFTP. Intended for offline tests of
    the full backup/restore/continuous/fetch-catalog paths; assign the result to
    Ctx.t before the command runs so ctx_connect() leaves it in place. Freed by
-   transport_disconnect like any Transport. */
+   transport_disconnect like any Transport.
+
+   TEST ONLY: declared, defined, and dispatched to only when the test runner
+   defines BKUP_TEST_TRANSPORT, so it is absent from the shipped binaries. */
+#ifdef BKUP_TEST_TRANSPORT
 Transport *transport_local_new(const char *root);
+#endif
 
 /* 1 = exists, 0 = absent, -1 = error. */
 int transport_exists(Transport *t, const char *path);

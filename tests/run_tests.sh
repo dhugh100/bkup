@@ -13,10 +13,17 @@
 #   tests/run_tests.sh 1                   # build + offline tiers + integration
 #   BKUP_TEST_SAN=1 tests/run_tests.sh     # add -fsanitize=address,undefined
 #
-# Object sets (determined by which headers each test includes):
-#   common  -- obj/common/*.o  obj/platform/*.o
-#   cli     -- common + obj/cli/*.o (excluding main.o)
-#   daemon  -- cli   + obj/daemon/*.o (excluding main.o)
+# Object set: every built object except the two main.o files, minus the .o of
+# any source file the test #includes directly (a test that pulls in a .c to
+# reach its statics supplies those symbols itself). This is derived per test
+# rather than declared, so there is no bucket to get wrong. transport.o is the
+# one exception, rebuilt here with -DBKUP_TEST_TRANSPORT for the test-only
+# local backend the shipped object does not contain.
+#
+# Every test must print a TEST-SUMMARY line reporting a nonzero assertion count
+# (test_common.h's TEST_DONE / TEST_REPORT do this). A test that exits 0 without
+# one is reported NO ASSERTIONS and fails the run, so a test that checks nothing
+# cannot look like a passing test.
 #
 # Exit status is nonzero if any test failed (skips do not fail the run).
 
@@ -42,7 +49,8 @@ make bin/bkup bin/bkupd || { echo "make failed" >&2; exit 1; }
 CC=gcc
 CFLAGS="-std=c11 -D_GNU_SOURCE -Wall -Wextra -Isrc"
 CFLAGS="$CFLAGS $(pkg-config --cflags sqlite3 libzstd libsodium libssh2)"
-LIBS="$(pkg-config --libs sqlite3 libzstd libsodium libssh2)"
+# -lpthread unconditionally: every test now links the daemon objects too.
+LIBS="$(pkg-config --libs sqlite3 libzstd libsodium libssh2) -lpthread"
 
 if [ "${BKUP_TEST_SAN:-0}" = "1" ]; then
     # Probe whether the sanitizer libraries are actually usable on this system.
@@ -65,13 +73,28 @@ if [ "${BKUP_TEST_SAN:-0}" = "1" ]; then
     rm -f "$san_probe" "$san_out"
 fi
 
-# Object sets
-COMMON_OBJS="$(ls obj/common/*.o) $(ls obj/platform/*.o)"
-CLI_OBJS="$COMMON_OBJS $(ls obj/cli/*.o | grep -v '/main\.o$')"
-DAEMON_OBJS="$CLI_OBJS $(ls obj/daemon/*.o | grep -v '/main\.o$')"
+# Every object a test may link. The two main.o files are excluded because they
+# define main(); each test brings its own.
+ALL_OBJS="$(ls obj/common/*.o obj/platform/*.o obj/cli/*.o obj/daemon/*.o \
+            | grep -v '/main\.o$' | tr '\n' ' ')"
 
 RUNDIR="$(mktemp -d /tmp/bkup_tests_XXXXXX)"
 trap 'rm -rf "$RUNDIR"' EXIT
+
+# The TR_LOCAL transport (transport_local_new) is test-only: it is compiled out
+# of the shipped binaries, so obj/common/transport.o has no local backend and
+# the offline round-trip tests would not link against it. Build one variant
+# object here with BKUP_TEST_TRANSPORT defined and swap it in for the shipped
+# one -- compiled once, not per test.
+CFLAGS="$CFLAGS -DBKUP_TEST_TRANSPORT"
+TRANSPORT_O="$RUNDIR/transport_test.o"
+if ! $CC $CFLAGS -c src/common/transport.c -o "$TRANSPORT_O" 2>"$RUNDIR/tr.log"; then
+    echo "failed to build the test transport variant:" >&2
+    cat "$RUNDIR/tr.log" >&2
+    exit 1
+fi
+ALL_OBJS="$(printf '%s\n' $ALL_OBJS | grep -vxF 'obj/common/transport.o' \
+            | tr '\n' ' ')$TRANSPORT_O"
 
 pass=0
 fail=0
@@ -107,28 +130,34 @@ group_of() {
 
 # Build + run one unit test, report it on a numbered line, then wipe its scratch.
 run_one() {
-    local src="$1" name objs extra_libs out build_log run_log tdir
+    local src="$1" name objs inc dup out build_log run_log tdir summary nchecks
     name="$(basename "$src" .c)"
     num=$((num + 1))
 
-    if [ "$name" = "test_opwait" ]; then
-        # Special: it #includes src/daemon/ipc.c to reach that file's static op
-        # mutex, so it needs the daemon set MINUS ipc.o -- linking ipc.o as well
-        # is a duplicate-symbol error. Its relative-path include also misses the
-        # '"daemon/' probe below, which is why this case comes first.
-        objs="$(printf '%s\n' $DAEMON_OBJS | grep -v '/ipc\.o$' | tr '\n' ' ')"
-        extra_libs="-lpthread"
-    elif grep -q '"daemon/' "$src" 2>/dev/null; then
-        objs="$DAEMON_OBJS"; extra_libs="-lpthread"
-    elif grep -q '"cli/' "$src" 2>/dev/null; then
-        objs="$CLI_OBJS"; extra_libs=""
-    else
-        objs="$COMMON_OBJS"; extra_libs=""
-    fi
+    # Link everything, minus the object of any .c this test #includes -- that
+    # translation unit is already in the test binary, so linking its .o too is a
+    # duplicate-symbol error (test_opwait pulls in daemon/ipc.c for its static
+    # op mutex). Both include spellings are recognised, "daemon/ipc.c" and
+    # "../src/daemon/ipc.c", and an include naming a source with no matching
+    # object is a hard error rather than a silently-unfiltered link.
+    objs="$ALL_OBJS"
+    for inc in $(sed -nE \
+            's|^[[:space:]]*#include[[:space:]]*"(\.\./src/)?([^"]+\.c)".*|\2|p' \
+            "$src"); do
+        dup="obj/${inc%.c}.o"
+        if [ ! -f "$dup" ]; then
+            printf "%3d. %-32s ERROR (includes %s; no %s to exclude)\n" \
+                   "$num" "$name" "$inc" "$dup"
+            failed_names="$failed_names $name(objs)"
+            fail=$((fail + 1))
+            return
+        fi
+        objs="$(printf '%s\n' $objs | grep -vxF "$dup" | tr '\n' ' ')"
+    done
 
     out="$RUNDIR/$name"
     build_log="$RUNDIR/${name}.build.log"
-    if ! $CC $CFLAGS "$src" $objs $LIBS $extra_libs -o "$out" >"$build_log" 2>&1; then
+    if ! $CC $CFLAGS "$src" $objs $LIBS -o "$out" >"$build_log" 2>&1; then
         printf "%3d. %-32s BUILD FAILED\n" "$num" "$name"
         sed 's/^/        /' "$build_log"
         failed_names="$failed_names $name(build)"
@@ -143,7 +172,25 @@ run_one() {
     mkdir -p "$tdir"
     run_log="$RUNDIR/${name}.run.log"
     if TMPDIR="$tdir" "$out" >"$run_log" 2>&1; then
-        printf "%3d. %-32s PASS\n" "$num" "$name"
+        # Exiting 0 is not enough: the test must also say how many assertions it
+        # evaluated. This catches a test that returns before reaching TEST_DONE,
+        # or never calls it at all -- cases the macro itself cannot see.
+        summary="$(grep -m1 '^TEST-SUMMARY checks=' "$run_log" || true)"
+        nchecks="${summary#TEST-SUMMARY checks=}"; nchecks="${nchecks%% *}"
+        if [ -z "$summary" ] || [ "${nchecks:-0}" -eq 0 ] 2>/dev/null; then
+            printf "%3d. %-32s NO ASSERTIONS\n" "$num" "$name"
+            if [ -z "$summary" ]; then
+                echo "        exited 0 without a TEST-SUMMARY line"
+                echo "        (end main() with TEST_DONE(name) or TEST_REPORT)"
+            else
+                echo "        $summary -- the test asserted nothing"
+            fi
+            failed_names="$failed_names $name(no-assertions)"
+            fail=$((fail + 1))
+            rm -rf "$tdir" "$out" "$build_log" "$run_log"
+            return
+        fi
+        printf "%3d. %-32s PASS (%s checks)\n" "$num" "$name" "$nchecks"
         pass=$((pass + 1))
     else
         printf "%3d. %-32s FAIL\n" "$num" "$name"

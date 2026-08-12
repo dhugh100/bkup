@@ -3,13 +3,12 @@
 #include <stdio.h>
 #include <time.h>
 #include "daemon/catalog_push.h"
+#include "test_common.h"
 
 static time_t fake;
 static time_t fake_clock(void) { return fake; }
 
 static int fails;
-#define CHECK(cond) do { if (!(cond)) { \
-    printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); fails++; } } while (0)
 
 int main(void)
 {
@@ -57,6 +56,5 @@ int main(void)
     CHECK(catalog_take_pending("v", &seq) == 1);
     CHECK(seq == 1);
 
-    if (fails == 0) printf("test_catalog_push: OK\n");
-    return fails ? 1 : 0;
+    TEST_DONE("test_catalog_push");
 }

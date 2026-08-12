@@ -11,10 +11,13 @@
 #include <signal.h>
 #include <sys/socket.h>
 
+#include "test_common.h"
+
 static int fail_count = 0;
 
 static void check(int cond, const char *what)
 {
+    tc_checks++;
     printf("  [%s] %s\n", cond ? "ok" : "FAIL", what);
     if (!cond) fail_count++;
 }
@@ -176,6 +179,6 @@ int main(void)
     test_wait_clamped();
     test_disconnect_while_waiting();
 
-    printf("\n%s (log: %s)\n", fail_count ? "FAILURES" : "all passed", logf);
-    return fail_count ? 1 : 0;
+    printf("\n(log: %s)\n", logf);
+    TEST_REPORT("test_opwait", fail_count, tc_checks);
 }

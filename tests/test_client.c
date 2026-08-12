@@ -12,12 +12,14 @@
 #include <sys/wait.h>
 
 #include "../src/common/ipcwire.h"
+#include "test_common.h"
 
 static int fail_count = 0;
 static char sock_path[100];   /* sun_path is 108 bytes */
 
 static void check(int cond, const char *what)
 {
+    tc_checks++;
     printf("  [%s] %s\n", cond ? "ok" : "FAIL", what);
     if (!cond) fail_count++;
 }
@@ -214,6 +216,5 @@ int main(void)
     test_prune_flags();
     test_no_daemon();
 
-    printf("\n%s\n", fail_count ? "FAILURES" : "all passed");
-    return fail_count ? 1 : 0;
+    TEST_REPORT("test_client", fail_count, tc_checks);
 }

@@ -22,7 +22,14 @@
    local_root (i.e. local_root acts as a chroot): a put to "/repo/config"
    writes local_root + "/repo/config".  It exists so backup/restore/continuous/
    fetch-catalog can be tested end to end with no SFTP server.  The ssh code
-   paths below are unchanged; each public function just dispatches on kind. */
+   paths below are unchanged; each public function just dispatches on kind.
+
+   TR_LOCAL is a TEST-ONLY backend and is compiled only when
+   BKUP_TEST_TRANSPORT is defined, which the test runner does and the shipped
+   build does not.  Nothing in src/ calls transport_local_new, so without the
+   guard it would be dead code inside bin/bkup and bin/bkupd -- a test seam
+   present in the product.  Both the backend and every dispatch to it vanish
+   from a normal build; the SSH paths are compiled identically either way. */
 enum { TR_SSH = 0, TR_LOCAL = 1 };
 
 struct Transport {
@@ -36,6 +43,7 @@ struct Transport {
 static int lib_ready;
 
 /* ---- TR_LOCAL backend: a real filesystem tree rooted at local_root -------- */
+#ifdef BKUP_TEST_TRANSPORT
 
 static char *lmap(const struct Transport *t, const char *path)
 {
@@ -232,6 +240,19 @@ Transport *transport_local_new(const char *root)
     return t;
 }
 
+/* Dispatch to the local backend, or compile away entirely in a shipped build.
+   The macro carries the `return`, so each public function keeps a one-line
+   dispatch instead of a three-line #ifdef. */
+#define TR_LOCAL_RETURN(t, call) do { \
+    if ((t)->kind == TR_LOCAL) return call; \
+} while (0)
+
+#else   /* !BKUP_TEST_TRANSPORT */
+
+#define TR_LOCAL_RETURN(t, call) do { } while (0)
+
+#endif  /* BKUP_TEST_TRANSPORT */
+
 static int tcp_connect(const char *host, int port)
 {
     char portstr[16];
@@ -418,7 +439,9 @@ Transport *transport_connect(const char *host, int port, const char *user)
 void transport_disconnect(Transport *t)
 {
     if (!t) return;
+#ifdef BKUP_TEST_TRANSPORT
     if (t->kind == TR_LOCAL) { free(t->local_root); free(t); return; }
+#endif
     if (t->sftp) libssh2_sftp_shutdown(t->sftp);
     if (t->session) {
         libssh2_session_disconnect(t->session, "bye");
@@ -430,7 +453,7 @@ void transport_disconnect(Transport *t)
 
 int transport_exists(Transport *t, const char *path)
 {
-    if (t->kind == TR_LOCAL) return local_exists(t, path);
+    TR_LOCAL_RETURN(t, local_exists(t, path));
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     int rc = libssh2_sftp_stat(t->sftp, path, &attrs);
     if (rc == 0) return 1;
@@ -440,7 +463,7 @@ int transport_exists(Transport *t, const char *path)
 
 int transport_mkdir(Transport *t, const char *path)
 {
-    if (t->kind == TR_LOCAL) return local_mkdir(t, path);
+    TR_LOCAL_RETURN(t, local_mkdir(t, path));
     int rc = libssh2_sftp_mkdir(t->sftp, path, 0700);
     if (rc == 0) return 0;
     unsigned long e = libssh2_sftp_last_error(t->sftp);
@@ -450,7 +473,7 @@ int transport_mkdir(Transport *t, const char *path)
 
 int transport_delete(Transport *t, const char *path)
 {
-    if (t->kind == TR_LOCAL) return local_delete(t, path);
+    TR_LOCAL_RETURN(t, local_delete(t, path));
     int rc = libssh2_sftp_unlink(t->sftp, path);
     if (rc == 0) return 0;
     if (libssh2_sftp_last_error(t->sftp) == LIBSSH2_FX_NO_SUCH_FILE) return 0;
@@ -459,7 +482,7 @@ int transport_delete(Transport *t, const char *path)
 
 int transport_rmtree(Transport *t, const char *path)
 {
-    if (t->kind == TR_LOCAL) return local_rmtree(t, path);
+    TR_LOCAL_RETURN(t, local_rmtree(t, path));
     LIBSSH2_SFTP_HANDLE *d = libssh2_sftp_opendir(t->sftp, path);
     if (!d) {
         /* not a directory (a plain file) or already absent: unlink it */
@@ -497,7 +520,7 @@ int transport_rmtree(Transport *t, const char *path)
 
 int transport_rmdir(Transport *t, const char *path)
 {
-    if (t->kind == TR_LOCAL) return local_rmdir(t, path);
+    TR_LOCAL_RETURN(t, local_rmdir(t, path));
     if (libssh2_sftp_rmdir(t->sftp, path) == 0) return 0;
     if (libssh2_sftp_last_error(t->sftp) == LIBSSH2_FX_NO_SUCH_FILE) return 0;
     return -1;
@@ -505,7 +528,7 @@ int transport_rmdir(Transport *t, const char *path)
 
 int transport_mkdir_p(Transport *t, const char *path)
 {
-    if (t->kind == TR_LOCAL) return local_mkdir_p(t, path);
+    TR_LOCAL_RETURN(t, local_mkdir_p(t, path));
     char *tmp = xstrdup(path);
     for (char *s = tmp + 1; *s; s++) {
         if (*s == '/') {
@@ -554,7 +577,7 @@ static int do_rename(Transport *t, const char *tmp, const char *path,
 int transport_put(Transport *t, const char *path,
                   const uint8_t *data, size_t len, int overwrite)
 {
-    if (t->kind == TR_LOCAL) return local_put(t, path, data, len, overwrite);
+    TR_LOCAL_RETURN(t, local_put(t, path, data, len, overwrite));
     char *tmp = xmalloc(strlen(path) + 5);
     sprintf(tmp, "%s.tmp", path);
 
@@ -573,7 +596,7 @@ int transport_put(Transport *t, const char *path,
 
 int transport_get(Transport *t, const char *path, Buf *out)
 {
-    if (t->kind == TR_LOCAL) return local_get(t, path, out);
+    TR_LOCAL_RETURN(t, local_get(t, path, out));
     LIBSSH2_SFTP_HANDLE *h = libssh2_sftp_open(t->sftp, path,
         LIBSSH2_FXF_READ, 0);
     if (!h) return -1;
@@ -592,7 +615,7 @@ int transport_get(Transport *t, const char *path, Buf *out)
 int transport_put_file(Transport *t, const char *local, const char *remote,
                        int overwrite)
 {
-    if (t->kind == TR_LOCAL) return local_put_file(t, local, remote, overwrite);
+    TR_LOCAL_RETURN(t, local_put_file(t, local, remote, overwrite));
     FILE *f = fopen(local, "rb");
     if (!f) return -1;
     char *tmp = xmalloc(strlen(remote) + 5);
@@ -619,7 +642,7 @@ out:
 
 int transport_get_file(Transport *t, const char *remote, const char *local)
 {
-    if (t->kind == TR_LOCAL) return local_get_file(t, remote, local);
+    TR_LOCAL_RETURN(t, local_get_file(t, remote, local));
     LIBSSH2_SFTP_HANDLE *h = libssh2_sftp_open(t->sftp, remote,
         LIBSSH2_FXF_READ, 0);
     if (!h) return -1;
