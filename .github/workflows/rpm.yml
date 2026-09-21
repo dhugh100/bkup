@@ -74,12 +74,12 @@ jobs:
           echo "tarname=bkup-$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create source tarball
-        # Stage exactly what the spec's %build/%install needs: Makefile, LICENSE, src/, selinux/, doSetup.sh.
+        # Stage exactly what the spec's %build/%install needs: Makefile, LICENSE, src/, selinux/, doSetup.sh, vm-snap.sh, vm-restore.sh.
         run: |
           TARNAME="${{ steps.ver.outputs.tarname }}"
           mkdir -p ~/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
           mkdir -p /tmp/$TARNAME
-          cp -a Makefile LICENSE src selinux doSetup.sh /tmp/$TARNAME/
+          cp -a Makefile LICENSE src selinux doSetup.sh vm-snap.sh vm-restore.sh /tmp/$TARNAME/
           tar -czf ~/rpmbuild/SOURCES/${TARNAME}.tar.gz -C /tmp "$TARNAME"
           cp packaging/60-bkupd-fanotify.conf ~/rpmbuild/SOURCES/
           cp bkupd.service ~/rpmbuild/SOURCES/
