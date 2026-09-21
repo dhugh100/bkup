@@ -37,5 +37,6 @@ void log_set_thread_cb(void (*cb)(const char *lvl, const char *msg, void *ud),
 /* Per-thread die handler.  If set, called instead of exit(1) after the
    fatal message is delivered.  Must not return (use pthread_exit, etc.). */
 void log_set_thread_die(void (*fn)(void));
+void (*log_get_thread_die(void))(void);   /* the current handler, for chaining */
 
 #endif

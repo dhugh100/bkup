@@ -42,3 +42,20 @@ keep-daily   = 7
 keep-weekly  = 4
 keep-monthly = 12
 keep-yearly  = 1
+
+# libvirt/KVM guests. vm-snap.sh (shipped with the source) takes an external
+# disk snapshot of each running guest before the scan and folds it back after,
+# so the backup reads a stable qcow2 rather than one the guest is writing to.
+# The overlay the guest writes to meanwhile is excluded; domain XML and NVRAM
+# are staged under /var/lib/bkup/vm so a guest can be re-defined on restore.
+[user "vm"]
+owner        = root
+source       = /var/lib/libvirt/images
+source       = /var/lib/bkup/vm
+exclude      = *.bkup-overlay
+continuous   = off
+backup       = daily 01:00
+pre-backup   = /usr/local/bin/vm-snap.sh begin
+post-backup  = /usr/local/bin/vm-snap.sh end
+keep-daily   = 7
+keep-weekly  = 4

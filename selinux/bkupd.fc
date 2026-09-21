@@ -13,3 +13,7 @@ HOME_DIR/\.local/share/bkup(/.*)?		gen_context(system_u:object_r:bkupd_catalog_t
 # Durable event log dir + files (default /var/log/bkup/bkup.log). Own type so the
 # daemon can create and chmod its log without write to all of var_log_t.
 /var/log/bkup(/.*)?				gen_context(system_u:object_r:bkupd_log_t,s0)
+
+# Hook staging area (/var/lib/bkup/): domain XML + NVRAM copies made by
+# vm-snap.sh before a backup, read by the scan as a source.
+/var/lib/bkup(/.*)?				gen_context(system_u:object_r:bkupd_var_lib_t,s0)

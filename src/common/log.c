@@ -70,6 +70,11 @@ void log_set_thread_die(void (*fn)(void))
     tls_die = fn;
 }
 
+void (*log_get_thread_die(void))(void)
+{
+    return tls_die;
+}
+
 static void vlog(const char *lvl, const char *fmt, va_list ap)
 {
     char msg[2048];

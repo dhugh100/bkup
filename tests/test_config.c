@@ -166,6 +166,39 @@ static void test_per_user_keep_overrides(void)
     rmtree_local(dir);
 }
 
+/* ---- pre-backup / post-backup and owner override ---- */
+
+static void test_hooks(void)
+{
+    char dir[64]; tmpdir(dir, sizeof dir);
+    char *path = write_conf(dir,
+        "server = myserver\n"
+        "repo = /backups\n"
+        "[user \"vm\"]\n"
+        "owner = root\n"
+        "source = /var/lib/libvirt/images\n"
+        "pre-backup = /usr/local/bin/vm-snap.sh begin\n"
+        "post-backup = /usr/local/bin/vm-snap.sh end\n"
+        "[user \"plain\"]\n"
+        "source = /home/plain\n");
+    Config *c = config_load(path);
+    CHECK(c != NULL);
+    CHECK(c->nusers == 2);
+    CHECKEQ_STR(c->users[0].pre_backup,  "/usr/local/bin/vm-snap.sh begin");
+    CHECKEQ_STR(c->users[0].post_backup, "/usr/local/bin/vm-snap.sh end");
+    /* owner override: a second, separately named set for an existing user */
+    CHECKEQ_STR(c->users[0].name, "vm");
+    CHECKEQ_STR(c->users[0].owner, "root");
+    CHECKEQ_INT(c->users[0].scope, SCOPE_SYSTEM);
+    CHECK(strstr(c->users[0].repo, "/vm") != NULL);
+    CHECK(strstr(c->users[0].db, "/vm.db") != NULL);
+    CHECK(c->users[1].pre_backup == NULL);
+    CHECK(c->users[1].post_backup == NULL);
+    config_free(c);
+    free(path);
+    rmtree_local(dir);
+}
+
 /* ---- continuous: default on; bool parsing for all accepted spellings ---- */
 
 static void test_continuous_bool(void)
@@ -431,6 +464,7 @@ int main(void)
     test_legacy_source_section();
     test_global_excludes_and_keep();
     test_per_user_keep_overrides();
+    test_hooks();
     test_continuous_bool();
     test_port();
     test_user_excluded();

@@ -173,6 +173,8 @@ static void set_user_kv(User *s, const char *key, const char *val,
     else if (!strcmp(key, "exclude"))         append_str(&s->excludes, &s->nexcludes, expand_user_tilde(val, s->owner));
     else if (!strcmp(key, "continuous-exclude")) append_str(&s->continuous_excludes, &s->ncontinuous_excludes, expand_user_tilde(val, s->owner));
     else if (!strcmp(key, "continuous"))      s->continuous = parse_bool(val, 1);
+    else if (!strcmp(key, "pre-backup"))      { free(s->pre_backup);  s->pre_backup  = xstrdup(val); }
+    else if (!strcmp(key, "post-backup"))     { free(s->post_backup); s->post_backup = xstrdup(val); }
     else if (!strcmp(key, "backup"))          { free(s->backup_sched); s->backup_sched = xstrdup(val); }
     else if (!strcmp(key, "prune"))           { free(s->prune_sched); s->prune_sched = xstrdup(val); }
     else if (!strcmp(key, "keep-last"))       s->keep_last    = atoi(val);
@@ -349,6 +351,7 @@ static void free_user(User *s)
     free(s->name); free(s->owner); free(s->repo);
     free(s->db); free(s->passphrase_file);
     free(s->backup_sched); free(s->prune_sched);
+    free(s->pre_backup); free(s->post_backup);
     for (int i = 0; i < s->nsources; i++) free(s->sources[i]);
     for (int i = 0; i < s->nexcludes; i++) free(s->excludes[i]);
     for (int i = 0; i < s->ncontinuous_excludes; i++) free(s->continuous_excludes[i]);

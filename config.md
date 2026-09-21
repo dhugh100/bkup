@@ -276,6 +276,22 @@ source = /home/alice/Documents
 source = /home/alice/Projects
 ```
 
+### `owner`
+
+The Linux user this section belongs to. Defaults to the section name, which is
+the normal case: `[user "alice"]` is alice's backup set. Set it to give a
+second, separately scheduled and separately retained set to an existing user --
+typically `owner = root` for system data that wants its own hooks, schedule or
+retention, such as the `[user "vm"]` example under `pre-backup`. The section
+name still picks the catalog (`~owner/.local/share/bkup/NAME.db`) and repo
+subdirectory (`repo/NAME`); the CLI reaches the section with `-U NAME`. A user
+running without `-U` (and the GUI) get that user's first section in file order.
+
+```ini
+[user "vm"]
+owner = root
+```
+
 ### `exclude` (repeatable)
 
 An `fnmatch(3)` pattern. Two matching rules:
@@ -364,6 +380,47 @@ snapshots.
 
 ```ini
 continuous = off
+```
+
+### `pre-backup`, `post-backup`
+
+Shell command lines run around a scheduled or manual full backup of this
+user (`bkup backup`, the daemon's `backup` schedule, and the CLI's routed
+`backup`). Not run for continuous (watcher-triggered) snapshots -- set
+`continuous = off` on any user whose sources are only consistent between the
+hooks.
+
+- `pre-backup` runs after the catalog and server connection are ready and
+  before the scan starts. A non-zero exit aborts the backup (logged as a
+  failure; the scheduler retries at the next slot).
+- `post-backup` runs after the backup finishes, **whether it succeeded or
+  not** -- including when `pre-backup` refused, and when the backup died
+  partway through, and when `bkupd` is stopped while the backup is running
+  (the daemon runs it, with `failed`, before exiting). It runs exactly once
+  per backup. A non-zero exit is logged but does not change the backup's
+  outcome. A root `bkup backup` killed by a signal is the one case it does
+  not cover.
+
+Both run via `/bin/sh -c` as the user running the backup -- root, under
+`bkupd` -- with `BKUP_USER` (the section name), `BKUP_HOOK` (`pre` or `post`)
+and, for `post-backup`, `BKUP_STATUS` (`ok` or `failed`) in the environment.
+Their stdout and stderr are forwarded line by line to the event log. There is
+no timeout: a hook that hangs holds the daemon's operation lock.
+
+The shipped `vm-snap.sh` is the reference use: it snapshots running
+libvirt/KVM guests' qcow2 disks so the backup reads a stable image, and folds
+the snapshots back afterwards.
+
+```ini
+[user "vm"]
+owner        = root
+source       = /var/lib/libvirt/images
+source       = /var/lib/bkup/vm
+exclude      = *.bkup-overlay
+continuous   = off
+backup       = daily 01:00
+pre-backup   = /usr/local/bin/vm-snap.sh begin
+post-backup  = /usr/local/bin/vm-snap.sh end
 ```
 
 ### `backup`

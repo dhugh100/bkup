@@ -13,6 +13,7 @@
 #include "scheduler.h"
 #include "userstate.h"
 #include "watch.h"
+#include "cli/hook.h"
 #include "common/config.h"
 #include "common/log.h"
 #include "common/util.h"
@@ -165,6 +166,7 @@ int main(int argc, char **argv)
     close(srv);
     unlink(sock_path);
     free(sp_alloc);
+    hook_shutdown();   /* release a mid-backup pre hook (VM snapshot etc.) */
     log_info("bkupd stopped");
     return 0;
 }

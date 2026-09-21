@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 
 #include "commands.h"
+#include "hook.h"
 #include "common/db.h"
 #include "common/types.h"
 #include "common/chunk.h"
@@ -650,6 +651,10 @@ int cmd_backup(Ctx *c, int argc, char **argv)
         "(SELECT id FROM snapshots WHERE state=0)");
     db_exec(c->db, "DELETE FROM snapshots WHERE state=0");
 
+    /* From here until hook_backup_end, the post-backup hook runs even if a
+       die() cuts the backup short (see hook.c). */
+    hook_backup_begin(c->src);
+
     char host[256] = "";
     gethostname(host, sizeof host - 1);
     sqlite3_stmt *is = db_prep(c->db,
@@ -709,6 +714,7 @@ int cmd_backup(Ctx *c, int argc, char **argv)
     sqlite3_finalize(fin);
 
     upload_catalog(c, snap);
+    hook_backup_end();
 
     log_info("snapshot %lld complete: %lld changed, %lld chunks (%lld new %lld dedup), "
              "%lld bytes raw -> %lld bytes stored",

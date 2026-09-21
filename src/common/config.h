@@ -30,6 +30,12 @@ typedef struct {
 
     int    continuous;      /* watcher-driven continuous backups on/off (default on) */
 
+    char  *pre_backup;      /* optional: shell command run (as the backup's uid,
+                               root under bkupd) before a scheduled/manual backup
+                               scans; a non-zero exit aborts the backup */
+    char  *post_backup;     /* optional: shell command run after the backup, on
+                               success and on failure alike */
+
     char  *backup_sched;    /* schedule string, e.g. "daily 02:00" (raw) */
     char  *prune_sched;     /* schedule string, e.g. "weekly" (raw) */
 

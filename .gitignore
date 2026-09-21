@@ -12,6 +12,8 @@
 !tests/
 !tests/**
 !doSetup.sh
+!vm-snap.sh
+!vm-restore.sh
 !bkupd.service
 !bkup.conf.example
 !selinux/

@@ -5,7 +5,7 @@
 %{!?_presetdir: %global _presetdir /usr/lib/systemd/system-preset}
 
 Name:           bkup
-Version:        0.11.1
+Version:        0.12.1
 Release:        1%{?dist}
 Summary:        Encrypted deduplicating backup tool (CLI + daemon + GUI)
 
@@ -68,12 +68,18 @@ install -D -m 0644 %{SOURCE3} \
         %{buildroot}%{_presetdir}/80-bkupd.preset
 install -D -m 0755 doSetup.sh \
         %{buildroot}/usr/local/bin/bkup-setup
+install -D -m 0755 vm-snap.sh \
+        %{buildroot}/usr/local/bin/vm-snap.sh
+install -D -m 0755 vm-restore.sh \
+        %{buildroot}/usr/local/bin/vm-restore.sh
 
 %files
 %license LICENSE
 /usr/local/bin/bkup
 /usr/local/bin/bkupd
 /usr/local/bin/bkup-gui
+/usr/local/bin/vm-snap.sh
+/usr/local/bin/vm-restore.sh
 %dir %{_datadir}/selinux/packages/%{name}
 %{_datadir}/selinux/packages/%{name}/bkupd.pp
 %{_sysctldir}/60-bkupd-fanotify.conf
@@ -128,6 +134,8 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Mon Sep 21 2026 dhugh <dhugh100@users.noreply.github.com> - 0.12.1-1
+- Release 0.12.1
 * Wed Aug 12 2026 dhugh <dhugh100@users.noreply.github.com> - 0.11.1-1
 - Release 0.11.1
 * Wed Aug 12 2026 dhugh <dhugh100@users.noreply.github.com> - 0.11.0-1

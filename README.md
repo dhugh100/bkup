@@ -205,6 +205,71 @@ per distinct fsid. A source that spans multiple btrfs subvolumes is therefore
 fully covered, with path resolution happening in the group that owns each event's
 filesystem.
 
+## Hooks and virtual machines
+
+A `[user]` section may name a `pre-backup` and a `post-backup` command
+(`config.md`). They bracket every full backup of that user: `pre-backup` runs
+before the scan and aborts the backup by exiting non-zero; `post-backup` runs
+afterwards, exactly once, on success and on failure alike -- it is chained onto
+the thread's `die()` handler (`src/cli/hook.c`) so that a backup cut short
+midway still releases whatever the pre hook set up, and the daemon runs it
+on shutdown if a backup is in flight. Continuous snapshots do not run hooks.
+
+`vm-snap.sh` is the hook pair for libvirt/KVM guests with qcow2 disks. `begin`
+takes an external disk-only snapshot of each running guest (`--quiesce` through
+the guest agent when present, crash-consistent otherwise), so the guest writes
+to a `*.bkup-overlay` file and the base image holds still for the scan; it also
+stages `virsh dumpxml --security-info` and the UEFI NVRAM under
+`/var/lib/bkup/vm`. `end` does `blockcommit --pivot` and deletes the overlay
+through libvirt. `begin` runs `end` first, so an overlay left by a crashed run
+is folded rather than stacked. The backup is then an ordinary scan of the
+images directory plus the staging directory with `*.bkup-overlay` excluded:
+each run reads and hashes every disk in full (upload is only what changed, via
+dedup), so schedule it, not continuous.
+
+Restore is manual by design (writing straight into `/dev` or the images pool
+from the daemon is a foot-gun). `vm-restore.sh DOMAIN` (`-s SNAP` / `-A EPOCH`
+for an older version, `-f` to overwrite an image already in place) does the
+steps below: it restores the XML, reads the disk and NVRAM paths from it,
+restores those into `/root/vmrestore/DOMAIN`, `qemu-img check`s each image,
+moves them into place with their labels and `virsh define`s the domain. By
+hand, as root since the set is root-owned:
+
+```sh
+# 1. pull the image and its definition out of the latest snapshot
+#    (-s SNAP or -A EPOCH for an older one; `bkup -U vm snapshots` lists them)
+sudo bkup -U vm restore \
+    -f /var/lib/libvirt/images/fedora.qcow2 \
+    -f /var/lib/bkup/vm/fedora.xml \
+    /root/vmrestore
+# -> /root/vmrestore/fedora.qcow2, /root/vmrestore/fedora.xml
+
+# 2. put the disk back where the XML expects it, with libvirt's label
+sudo mv /root/vmrestore/fedora.qcow2 /var/lib/libvirt/images/fedora.qcow2
+sudo restorecon -v /var/lib/libvirt/images/fedora.qcow2
+
+# 3. re-register the domain (replaces an existing definition of the same name)
+sudo virsh -c qemu:///system define /root/vmrestore/fedora.xml
+
+# 4. start it -- or from virt-manager, which lists it as soon as define returns
+sudo virsh -c qemu:///system start fedora
+```
+
+A UEFI guest also needs its NVRAM back before step 3 (the path is the
+`<nvram>` element in the XML):
+
+```sh
+sudo bkup -U vm restore -f /var/lib/bkup/vm/win11.nvram /root/vmrestore
+sudo cp /root/vmrestore/win11.nvram /var/lib/libvirt/qemu/nvram/win11_VARS.qcow2
+sudo chown qemu:qemu /var/lib/libvirt/qemu/nvram/win11_VARS.qcow2
+sudo restorecon -v /var/lib/libvirt/qemu/nvram/win11_VARS.qcow2
+```
+
+For a drill while the real guest still exists, stop after step 1 and run
+`qemu-img check` on the restored image, or bring it up as a clone: change the
+XML's `<name>`, delete its `<uuid>`, point `<source file=...>` at a renamed copy
+of the image, then do steps 2-4 on those.
+
 ## Prune and retention
 
 `bkup prune` enforces retention by examining all complete snapshots and deciding

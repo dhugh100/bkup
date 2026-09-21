@@ -1,4 +1,4 @@
-policy_module(bkupd, 1.0.14)
+policy_module(bkupd, 1.0.16)
 
 ########################################
 # Declarations
@@ -25,6 +25,12 @@ files_type(bkupd_catalog_t)
 # fopen()s the log "a", then fchmod()s it to 0664 -- that fchmod is the setattr.
 type bkupd_log_t;
 logging_log_file(bkupd_log_t)
+
+# Hook staging area (/var/lib/bkup/). pre-backup hooks such as vm-snap.sh
+# stage the small side files a backup needs next to the data (domain XML,
+# NVRAM) here; own type so the daemon does not get write to all of var_lib_t.
+type bkupd_var_lib_t;
+files_type(bkupd_var_lib_t)
 
 ########################################
 # Policy
@@ -129,3 +135,27 @@ corenet_tcp_connect_ssh_port(bkupd_t)
 corenet_tcp_sendrecv_ssh_port(bkupd_t)
 sysnet_dns_name_resolve(bkupd_t)
 auth_use_nsswitch(bkupd_t)
+
+# pre-backup / post-backup hooks (cli/hook.c) run `/bin/sh -c CMD` in the
+# daemon's own domain -- no transition, so everything the hook touches must be
+# allowed to bkupd_t directly. The shell and the usual coreutils, plus virsh for
+# vm-snap.sh, which talks to libvirtd over its socket; the actual snapshot,
+# blockcommit and overlay deletion are done by libvirtd, so no write to
+# virt_image_t is needed here. The staging dir is created by the hook
+# (mkdir -p /var/lib/bkup), hence the filetrans from var_lib_t.
+corecmd_exec_shell(bkupd_t)
+corecmd_exec_bin(bkupd_t)
+virt_exec_virsh(bkupd_t)
+virt_stream_connect(bkupd_t)
+manage_dirs_pattern(bkupd_t, bkupd_var_lib_t, bkupd_var_lib_t)
+manage_files_pattern(bkupd_t, bkupd_var_lib_t, bkupd_var_lib_t)
+files_var_lib_filetrans(bkupd_t, bkupd_var_lib_t, dir, "bkup")
+# libvirtd identifies each connecting client by reading its /proc/<pid>/stat
+# (peer lookup for polkit). The client here is virsh running in bkupd_t, so
+# the daemon's own process state must be readable by the modular libvirt
+# driver. (Seen as virtqemud_t; on a monolithic-libvirtd host the equivalent
+# would be virtd_t.)
+gen_require(`
+	type virtqemud_t;
+')
+ps_process_pattern(virtqemud_t, bkupd_t)
