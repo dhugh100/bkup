@@ -5,7 +5,7 @@
 %{!?_presetdir: %global _presetdir /usr/lib/systemd/system-preset}
 
 Name:           bkup
-Version:        0.12.2
+Version:        0.12.3
 Release:        1%{?dist}
 Summary:        Encrypted deduplicating backup tool (CLI + daemon + GUI)
 
@@ -134,6 +134,8 @@ if [ "$1" -eq 0 ]; then
 fi
 
 %changelog
+* Tue Nov 03 2026 dhugh <dhugh100@users.noreply.github.com> - 0.12.3-1
+- Release 0.12.3
 * Mon Sep 21 2026 dhugh <dhugh100@users.noreply.github.com> - 0.12.2-1
 - Release 0.12.2
 * Mon Sep 21 2026 dhugh <dhugh100@users.noreply.github.com> - 0.12.1-1
